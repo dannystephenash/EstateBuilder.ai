@@ -26,7 +26,11 @@ js/                             ← All application JavaScript
   section3d.js                  ← 3D building section view
   renderer-components.js        ← Textures, materials, rebuildBuilding(), lighting, vol panel
   unit-mix.js                   ← Unit mix editor, floor plans, SVG viewer
-  sitemap.js                    ← Mapbox map, parcel picker, zoning overlay, geocoder
+  sitemap-core.js               ← Map init, global state, lifecycle, utilities
+  sitemap-lot.js                ← Lot polygon drawing/editing
+  sitemap-volumes.js            ← Building volumes, shape editing, volume panel
+  sitemap-zoning.js             ← Zoning overlay
+  sitemap-parcel-picker.js      ← Multi-parcel selection + merge
   optimal-massing.js            ← generateOptimalMassing(), midrise/highrise builders
   ai-chat.js                    ← Groq API, AI analysis renderers, jurisdiction config
   scenarios.js                  ← Financial scenario modelling, sensitivity analysis
@@ -56,8 +60,11 @@ js/                             ← All application JavaScript
 | Report, PDF/PPTX export | `js/report.js` |
 | 3D section view | `js/section3d.js` |
 | Unit mix editor, floor plans | `js/unit-mix.js` |
-| Mapbox map, parcel picking, geocoding | `js/sitemap.js` |
-| Zoning detection, overlay | `js/sitemap.js` |
+| Map init, global state, lifecycle | `js/sitemap-core.js` |
+| Lot polygon drawing/editing | `js/sitemap-lot.js` |
+| Building volumes, shape editing, volume panel | `js/sitemap-volumes.js` |
+| Zoning detection, overlay | `js/sitemap-zoning.js` |
+| Mapbox parcel picking, multi-parcel merge | `js/sitemap-parcel-picker.js` |
 | Optimal massing generator | `js/optimal-massing.js` |
 | AI chat, Groq API | `js/ai-chat.js` |
 | Financial scenarios | `js/scenarios.js` |
@@ -71,7 +78,7 @@ Files are loaded in this order (each can use globals from all files above it):
 1. CDN libs (Three.js r128, Mapbox, Turf, jsPDF, PptxGen)
 2. data-model.js → lot-geometry.js → renderer.js → save-load.js
 3. proforma.js → report.js → section3d.js → renderer-components.js
-4. unit-mix.js → sitemap.js → optimal-massing.js
+4. unit-mix.js → sitemap-core.js → sitemap-lot.js → sitemap-volumes.js → sitemap-zoning.js → sitemap-parcel-picker.js → optimal-massing.js
 5. ai-chat.js → scenarios.js → zoning.js → ui.js (last — has init code)
 
 ## Docs
@@ -122,11 +129,4 @@ Files are loaded in this order (each can use globals from all files above it):
 | Playwright best practices, e2e test, browser automation, test selectors | `skills/playwright-best-practices/SKILL.md` |
 | Zoning approval, ZBLA, site plan, FSI target, corridor precedent, CBC, tower separation, angular plane, MTSA, density, developer feasibility | `skills/toronto-planning-approvals/SKILL.md` |
 | Bug, debug, error, broken, fix, regression, root cause, investigate | `skills/systematic-debugging/SKILL.md` |
-| Done, complete, finish, verify, prove, confirm it works, check | `skills/verification-before-completion/SKILL.md` |
-
-### Loading rules:
-1. For ANY 3D/renderer work: ALWAYS read `threejs-r128-constraint-SKILL.md` FIRST, then the topic-specific skill
-2. Multiple skills can be loaded for one task (e.g., materials + textures + lighting)
-3. **Before writing any non-trivial code, scan `skills/` for relevant SKILL.md files** — new skills may have been added since this table was last updated
-4. Skills override general knowledge — if a skill says "don't use X", don't use X
-5. If you find a skill not listed in the table above, still use it and follow its instructions
+| Done, complete, finish, verify, prove, confirm it works, check | `skills/verification-before-comple

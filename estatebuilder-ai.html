@@ -7,9 +7,11 @@
 <meta http-equiv="Expires" content="0">
 <title>OleaDev — Massing Builder</title>
 <!-- ── External libraries ──
-     For production deployments, generate SHA-384 SRI hashes for each CDN script
-     and add integrity="sha384-..." to lock the version (prevents CDN tampering).
-     Compute via: shasum -b -a 384 file | xxd -r -p | base64
+     SRI (Subresource Integrity) hashes applied where verifiable via npm registry.
+     The api.mapbox.com URLs lack SRI hashes because Mapbox's CDN bundles could not
+     be byte-verified against the npm dist from the build environment (network-restricted).
+     To add Mapbox SRI: run `curl -sL <URL> | openssl dgst -sha384 -binary | openssl base64 -A`
+     from a machine with direct CDN access and paste as integrity="sha384-<result>".
      The crossorigin="anonymous" attribute is required for SRI to work. -->
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js" crossorigin="anonymous"></script>
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" crossorigin="anonymous">
@@ -19,7 +21,7 @@
 <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.2/mapbox-gl-geocoder.css" rel="stylesheet" crossorigin="anonymous">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link href="css/estatebuilder.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js" integrity="sha384-ll8qH0IE3im19Dtlr1jtv5fdy+gm+0bx8T4+OYxPeJpc6PO1XLNFnyvdzaKJ78bU" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -658,9 +660,9 @@ window.addEventListener('unhandledrejection',function(e){
 });
 </script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js" integrity="sha384-Cck14aA9cifjYolcnjebXRfWGkz5ltHMBiG4px/j8GS+xQcb7OhNQWZYyWjQ+UwQ" crossorigin="anonymous"></script>
 
 <!-- ═══ APPLICATION MODULES (loaded in dependency order) ═══ -->
 <!-- Cache-bust version: bump this string to force browsers to re-fetch ALL JS files -->
@@ -668,17 +670,4 @@ window.addEventListener('unhandledrejection',function(e){
 <script src="js/lot-geometry.js?v=20260419v"></script>
 <script src="js/renderer.js?v=20260419v"></script>
 <script src="js/save-load.js?v=20260419v"></script>
-<script src="js/proforma.js?v=20260419v"></script>
-<script src="js/report.js?v=20260419v"></script>
-<script src="js/section3d.js?v=20260419v"></script>
-<script src="js/renderer-components.js?v=20260419v"></script>
-<script src="js/unit-mix.js?v=20260419v"></script>
-<script src="js/sitemap.js?v=20260419v"></script>
-<script src="js/optimal-massing.js?v=20260419v"></script>
-<script src="js/ai-chat.js?v=20260419v"></script>
-<script src="js/scenarios.js?v=20260419v"></script>
-<script src="js/zoning.js?v=20260419v"></script>
-<script src="js/ui.js?v=20260419v"></script>
-
-</body>
-</html>
+<script src="js/proforma.js?v=
