@@ -107,7 +107,11 @@ const loadOrder = [
   'section3d.js',
   'renderer-components.js',
   'unit-mix.js',
-  'sitemap.js',
+  'sitemap-core.js',
+  'sitemap-lot.js',
+  'sitemap-volumes.js',
+  'sitemap-zoning.js',
+  'sitemap-parcel-picker.js',
   'optimal-massing.js',
   'ai-chat.js',
   'scenarios.js',
@@ -496,9 +500,19 @@ if (pf) {
   // FSI = totalGFA / siteArea
   assertClose(pf.fsi, pf.totalGFA / pf.siteArea, 0.01, 'FSI = totalGFA / siteArea');
 
-  // Total soft costs = softCostPct × totalHard (single % of hard model)
-  const expectedSoft = pf.totalHard * (P.pf.softCostPct || 0.30);
-  assertClose(pf.totalSoft, expectedSoft, 1, 'totalSoft = softCostPct × totalHard');
+  // Total soft costs = softCostBase + DC charges + S37/CBC + parkland dedication
+  // Per pfCalc(): softCostBase = totalHard × softCostPct; DC = units × dcPerUnit + commGFA × dcCommPerSF;
+  //              s37 = units × s37PerUnit; parkland = P.pf.parkland
+  const softCostBase = pf.totalHard * (P.pf.softCostPct || 0.30);
+  const dcResi = pf.totalUnits * (P.pf.dcPerUnit || 0);
+  const dcComm = pf.commGFA * (P.pf.dcCommPerSF || 0);
+  const s37Total = pf.totalUnits * (P.pf.s37PerUnit || 0);
+  const parklandCost = P.pf.parkland || 0;
+  const expectedSoft = softCostBase + dcResi + dcComm + s37Total + parklandCost;
+  assertClose(pf.totalSoft, expectedSoft, 1, 'totalSoft = softCostBase + DC + CBC/S37 + parkland');
+
+  // softCostBase component alone should equal softPct × totalHard (sanity check on decomposition)
+  assert(pf.totalSoft > softCostBase, 'totalSoft includes more than just softCostBase (DC/S37/parkland)');
 
   // Hard costs should be > soft costs (typical for real estate)
   assert(pf.totalHard > 0, 'totalHard > 0');
