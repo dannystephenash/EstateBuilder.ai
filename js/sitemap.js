@@ -1,0 +1,3703 @@
+// sitemap.js — Mapbox map, parcel picker, lot drawing, zoning overlay, geocoder
+// ═══════════════════════════════════════════════════════════
+//  PANEL RESIZE
+// ═══════════════════════════════════════════════════════════
+(function(){
+  const handle=document.getElementById('panel-resize');
+  const panel=document.getElementById('panel');
+  let dragging=false,startX=0,startW=0;
+  // Notify all viewport renderers (3D canvas, Mapbox map, section3D) that their
+  // container size changed. Without this, the Mapbox map leaves a dark gap on
+  // the side where the panel used to be, because its internal canvas keeps the
+  // old size until told to resize.
+  function _resizeAll(){
+    try { onResize(); } catch(e) {}
+    try { if(typeof smMap !== 'undefined' && smMap && smMap.resize) smMap.resize(); } catch(e) {}
+    try {
+      if(typeof sec3d !== 'undefined' && sec3d && sec3d.renderer && sec3d.camera){
+        var sw = document.getElementById('section3d-wrap');
+        if(sw && sw.clientWidth > 0 && sw.clientHeight > 0){
+          sec3d.camera.aspect = sw.clientWidth / sw.clientHeight;
+          sec3d.camera.updateProjectionMatrix();
+          sec3d.renderer.setSize(sw.clientWidth, sw.clientHeight);
+        }
+      }
+    } catch(e) {}
+  }
+  handle.addEventListener('mousedown',e=>{
+    dragging=true;startX=e.clientX;startW=panel.offsetWidth;
+    document.body.style.cursor='ew-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const newW=startW+(e.clientX-startX);
+    panel.style.width=Math.max(280,Math.min(window.innerWidth*0.75,newW))+'px';
+    _resizeAll();
+  });
+  document.addEventListener('mouseup',()=>{
+    if(dragging){
+      dragging=false;
+      document.body.style.cursor='';
+      // Final settle: resize again on mouseup in case any handler missed
+      // the last mousemove, then redraw the section.
+      _resizeAll();
+      try { drawSection(); } catch(e) {}
+    }
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION TOGGLE
+// ═══════════════════════════════════════════════════════════
+function toggleSec(id){
+  const sec=document.getElementById(id);
+  const hd=sec.querySelector('.sec-hd');
+  const bd=sec.querySelector('.sec-bd');
+  hd.classList.toggle('collapsed');
+  bd.classList.toggle('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════
+initThree();
+console.log('%c[EstateBuilder v4.0-ENGINE] Loaded — MAT palette + mk() + addCurtainWall(opts) + addBalconyUnit','color:#AEBC46;font-weight:bold;font-size:12px');
+
+// Auto-load last session (before building panels)
+autoLoad();
+
+// Build all panels from (possibly restored) state
+buildLotPanel();
+buildSetbackPanel();
+buildRoadsPanel();
+buildLandscapePanel();
+buildFloorPanel();
+buildVolPanel();
+refreshProjectList();
+rebuildAll();
+
+// Wire project type selector with confirm dialog
+document.getElementById('project-type-select').addEventListener('change', function() {
+  const newType = this.value;
+  if (newType !== P.projectType) {
+    if (confirm('Switching asset class will reset all pro-forma defaults. Continue?')) {
+      loadAssetDefaults(newType);
+    } else {
+      this.value = P.projectType;
+    }
+  }
+});
+
+// Main 3D render loop — pauses when its canvas is hidden (other tabs active)
+// or when the browser tab is in the background. Saves significant GPU/battery.
+function animate(){
+  requestAnimationFrame(animate);
+  // Skip render when tab is hidden by browser (background tab)
+  if(typeof document !== 'undefined' && document.hidden) return;
+  // Skip render when our canvas is not visible (user is on AI/Pro-Forma/etc.)
+  var cw = (typeof document !== 'undefined') ? document.getElementById('canvas-wrap') : null;
+  if(cw && cw.style.display === 'none') return;
+  // Defensive: skip if canvas has zero dimensions (mid-layout)
+  if(cw && (cw.clientWidth < 1 || cw.clientHeight < 1)) return;
+  if(typeof renderer !== 'undefined' && typeof scene !== 'undefined' && typeof camera !== 'undefined'){
+    renderer.render(scene, camera);
+  }
+}
+animate();
+
+// ═══════════════════════════════════════════════════════════
+//  SITE MAP — Mapbox satellite lot drawing tool
+// ═══════════════════════════════════════════════════════════
+let smMap=null, smDraw=null, smStyle='satellite', smIs3D=false, smLotData=null, smMarkers=[];
+
+/**
+ * Initializes the Mapbox satellite map, geocoder, and drawing controls.
+ * Reads the Mapbox token from the input field and stores it in localStorage.
+ */
+function initSiteMap(){
+  const token=document.getElementById('mapbox-token').value.trim();
+  if(!token||!token.startsWith('pk.')){document.getElementById('mapbox-token').style.borderColor='#c44';return;}
+  localStorage.setItem('oleadev_mapbox_token',token);
+  mapboxgl.accessToken=token;
+  document.getElementById('sitemap-token').style.display='none';
+  document.getElementById('sitemap-controls').style.display='block';
+
+  smMap=new mapboxgl.Map({
+    container:'sitemap-map',
+    style:'mapbox://styles/mapbox/satellite-streets-v12',
+    center:P.siteCoords?[P.siteCoords.lng,P.siteCoords.lat]:[-79.38,43.70],zoom:P.siteCoords?16:12,pitch:0,bearing:0,attributionControl:false
+  });
+  smMap.addControl(new mapboxgl.AttributionControl({compact:true}),'bottom-right');
+  smMap.addControl(new mapboxgl.NavigationControl({showCompass:true,showZoom:true}),'bottom-left');
+  smMap.addControl(new mapboxgl.ScaleControl({maxWidth:200,unit:'metric'}),'bottom-left');
+
+  // Geocoder in the map itself
+  const gc=new MapboxGeocoder({accessToken:token,mapboxgl,placeholder:'Search address...',countries:'ca',
+    proximity:{longitude:-79.38,latitude:43.70},bbox:[-79.65,43.58,-79.10,43.85],zoom:18});
+  smMap.addControl(gc,'top-left');
+
+  // Drawing
+  smDraw=new MapboxDraw({displayControlsDefault:false,controls:{polygon:false,trash:false},defaultMode:'simple_select',
+    styles:[
+      {id:'gl-draw-polygon-fill',type:'fill',filter:['all',['==','$type','Polygon']],paint:{'fill-color':'#AEBC46','fill-opacity':0.15}},
+      {id:'gl-draw-polygon-stroke',type:'line',filter:['all',['==','$type','Polygon']],paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[2,1]}},
+      {id:'gl-draw-point',type:'circle',filter:['all',['==','$type','Point'],['==','meta','vertex']],paint:{'circle-radius':6,'circle-color':'#AEBC46','circle-stroke-color':'#1A1A1A','circle-stroke-width':2}},
+      {id:'gl-draw-point-mid',type:'circle',filter:['all',['==','$type','Point'],['==','meta','midpoint']],paint:{'circle-radius':4,'circle-color':'#888888','circle-stroke-color':'#1A1A1A','circle-stroke-width':1}},
+      {id:'gl-draw-line',type:'line',filter:['all',['==','$type','LineString']],paint:{'line-color':'#AEBC46','line-width':2,'line-dasharray':[3,2]}}
+    ]
+  });
+  smMap.addControl(smDraw);
+  smMap.on('draw.create',smOnDraw);
+  smMap.on('draw.update',smOnDraw);
+  smMap.on('draw.delete',()=>{document.getElementById('sitemap-lot-info').style.display='none';updateOptimalMassingButton();smClearMarkers();smLotData=null;});
+  smMap.once('load',()=>{
+    smMap.resize();
+    // ── Restore saved lot polygon and building volumes on map ──
+    smRestoreSavedPolygons();
+  });
+}
+
+function smRestoreSavedPolygons(){
+  if(!smMap)return;
+  // Restore lot polygon from saved GPS vertices
+  if(P.lot.gpsVerts&&P.lot.gpsVerts.length>=3){
+    const verts=P.lot.gpsVerts;
+    const coords=[...verts,verts[0]]; // close the ring
+    const poly=turf.polygon([coords]);
+    const areaSqM=turf.area(poly);
+    const areaSqFt=areaSqM*10.7639;
+    const perimM=turf.length(turf.polygonToLine(poly),{units:'meters'});
+    const edges=[];
+    for(let i=0;i<verts.length;i++){
+      const a=verts[i],b=verts[(i+1)%verts.length];
+      const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+      const dFt=dM*3.28084;
+      const bearing=turf.bearing(turf.point(a),turf.point(b));
+      const dirs=['N','NE','E','SE','S','SW','W','NW'];
+      const compass=dirs[Math.round(((bearing%360+360)%360)/45)%8];
+      edges.push({id:String.fromCharCode(65+i),from:a,to:b,lengthFt:dFt,lengthM:dM,compass});
+    }
+    smLotData={vertices:verts,geometry:poly.geometry,areaSqFt,areaSqM,perimFt:perimM*3.28084,edges,shape:verts.length+'pt polygon',vertexCount:verts.length};
+
+    // Draw the lot polygon on the map
+    try{
+      if(smMap.getLayer('saved-lot-fill'))smMap.removeLayer('saved-lot-fill');
+      if(smMap.getLayer('saved-lot-line'))smMap.removeLayer('saved-lot-line');
+      if(smMap.getSource('saved-lot'))smMap.removeSource('saved-lot');
+    }catch(e){}
+    smMap.addSource('saved-lot',{type:'geojson',data:poly});
+    smMap.addLayer({id:'saved-lot-fill',type:'fill',source:'saved-lot',paint:{'fill-color':'#AEBC46','fill-opacity':0.15}});
+    smMap.addLayer({id:'saved-lot-line',type:'line',source:'saved-lot',paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[2,1]}});
+
+    // Add vertex markers
+    verts.forEach((v,i)=>{
+      const el=document.createElement('div');
+      el.style.cssText='width:10px;height:10px;background:#AEBC46;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.5)';
+      const m=new mapboxgl.Marker({element:el}).setLngLat(v).addTo(smMap);
+      smMarkers.push(m);
+    });
+
+    // Fit map to lot bounds
+    const lngs=verts.map(v=>v[0]),lats=verts.map(v=>v[1]);
+    smMap.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:60,duration:0});
+
+    // Restore building volumes from saved GPS data
+    if(P.smVolumesGPS&&P.smVolumesGPS.length>0){
+      smVolumes=P.smVolumesGPS.map(sv=>({...sv}));
+      smVolNextId=Math.max(...smVolumes.map(v=>v.id||0))+1;
+      smVolumes.forEach(vol=>{
+        if(vol.customPoly&&vol.customPoly.length>=3) smDrawVolume(vol);
+      });
+      if(smVolumes.length>0) smSelectedVolId=smVolumes[0].id;
+      smRenderVolPanel();
+    }
+
+    // Update UI
+    smUpdateLotInfo(smLotData);
+    document.getElementById('sitemap-lot-info').style.display='block';
+    updateOptimalMassingButton();
+    document.getElementById('sitemap-instructions').innerHTML='Lot restored from save · <span style="color:#AEBC46;font-weight:600">Draw buildings</span> or <span style="color:#AEBC46;font-weight:600">re-draw</span> lot';
+  } else if(P.siteCoords){
+    // No polygon saved but have coordinates — center the map
+    smMap.setCenter([P.siteCoords.lng,P.siteCoords.lat]);
+    smMap.setZoom(17);
+  }
+}
+
+// Auto-load saved token AND auto-connect if token exists
+(function(){
+  const t=localStorage.getItem('oleadev_mapbox_token');
+  if(t){
+    document.getElementById('mapbox-token').value=t;
+    // Auto-connect to Mapbox on page load if we have a saved token
+    setTimeout(()=>{try{initSiteMap();}catch(e){console.warn('Auto-connect failed:',e);}},500);
+  }
+})();
+
+// ── Custom lot polygon drawer (replaces Mapbox Draw for reliability) ──
+let smLotDrawing=false;
+let smLotDrawPts=[];
+let smLotDrawMarkers=[];
+
+/**
+ * Enters lot-drawing mode on the site map, allowing the user to click vertices
+ * to define a custom lot polygon. Cancels any active parcel picker or building draw.
+ */
+function sitemapDraw(){
+  if(!smMap)return;
+  // Cancel parcel picker if active
+  if(smParcelPickerActive){smCancelMultiParcel();}
+  // Cancel building drawing if active
+  if(smBldgDrawing) smCancelBldgDraw();
+  // Cancel lot drawing if already active
+  if(smLotDrawing){smCancelLotDraw();return;}
+  // Clear old lot
+  if(smDraw){try{smDraw.deleteAll();}catch(e){}}
+  smClearMarkers();smLotData=null;
+  document.getElementById('sitemap-lot-info').style.display='none';
+  updateOptimalMassingButton();
+  // Clear old lot layers
+  try{if(smMap.getLayer('sm-custom-lot-fill'))smMap.removeLayer('sm-custom-lot-fill');}catch(e){}
+  try{if(smMap.getLayer('sm-custom-lot-line'))smMap.removeLayer('sm-custom-lot-line');}catch(e){}
+  try{if(smMap.getSource('sm-custom-lot'))smMap.removeSource('sm-custom-lot');}catch(e){}
+
+  smLotDrawing=true;
+  smLotDrawPts=[];
+  smMap.getCanvas().style.cursor='crosshair';
+  smMap.on('click',smLotClickHandler);
+  document.getElementById('sitemap-instructions').innerHTML='<b style="color:#AEBC46">Click</b> to place vertices · <b style="color:#AEBC46">Click first vertex</b> or press <b>CLOSE</b> to finish<br><button onclick="smCloseLotPoly()" style="margin-top:4px;background:#AEBC46;color:#111;border:none;border-radius:4px;padding:5px 20px;cursor:pointer;font-weight:700;font-size:12px">CLOSE LOT POLYGON</button> <button onclick="smCancelLotDraw()" style="margin-top:4px;background:#c44;color:#fff;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-weight:600;font-size:11px;margin-left:4px">CANCEL</button>';
+}
+
+function smLotClickHandler(e){
+  if(!smLotDrawing||smBldgDrawing)return;
+  const pt=[e.lngLat.lng,e.lngLat.lat];
+
+  // If 3+ points and click near first vertex → close
+  if(smLotDrawPts.length>=3){
+    const first=smLotDrawPts[0];
+    const distM=turf.distance(turf.point(pt),turf.point(first),{units:'meters'});
+    if(distM<3){smCloseLotPoly();return;}
+  }
+
+  smLotDrawPts.push(pt);
+
+  // Vertex marker — first vertex is larger and clickable
+  const isFirst=smLotDrawPts.length===1;
+  const el=document.createElement('div');
+  el.style.cssText=`width:${isFirst?18:12}px;height:${isFirst?18:12}px;background:${isFirst?'#AEBC46':'#AEBC46'};border:${isFirst?'3px':'2px'} solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.5);${isFirst?'cursor:pointer':''}`;
+  if(isFirst) el.title='Click to close polygon';
+  const m=new mapboxgl.Marker({element:el,anchor:'center'}).setLngLat(pt).addTo(smMap);
+  if(isFirst){
+    el.addEventListener('click',(ev)=>{ev.stopPropagation();if(smLotDrawPts.length>=3)smCloseLotPoly();});
+  }
+  smLotDrawMarkers.push(m);
+
+  // Update preview line
+  smUpdateLotDrawLine();
+}
+
+function smUpdateLotDrawLine(){
+  if(smLotDrawPts.length<2)return;
+  const data={type:'Feature',geometry:{type:'LineString',coordinates:smLotDrawPts}};
+  if(smMap.getSource('sm-lot-draw-line')){
+    smMap.getSource('sm-lot-draw-line').setData(data);
+  } else {
+    smMap.addSource('sm-lot-draw-line',{type:'geojson',data:data});
+    smMap.addLayer({id:'sm-lot-draw-line',type:'line',source:'sm-lot-draw-line',paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[3,2]}});
+  }
+}
+
+function smCloseLotPoly(){
+  if(!smLotDrawing||smLotDrawPts.length<3)return;
+  const coords=[...smLotDrawPts,smLotDrawPts[0]];
+
+  // Clean up drawing UI
+  smLotDrawing=false;
+  smMap.getCanvas().style.cursor='';
+  smMap.off('click',smLotClickHandler);
+  smLotDrawMarkers.forEach(m=>m.remove());
+  smLotDrawMarkers=[];
+  try{if(smMap.getLayer('sm-lot-draw-line'))smMap.removeLayer('sm-lot-draw-line');}catch(e){}
+  try{if(smMap.getSource('sm-lot-draw-line'))smMap.removeSource('sm-lot-draw-line');}catch(e){}
+
+  // Draw the final lot polygon
+  const poly={type:'Feature',geometry:{type:'Polygon',coordinates:[coords]},properties:{}};
+  if(smMap.getSource('sm-custom-lot')){
+    smMap.getSource('sm-custom-lot').setData(poly);
+  } else {
+    smMap.addSource('sm-custom-lot',{type:'geojson',data:poly});
+    smMap.addLayer({id:'sm-custom-lot-fill',type:'fill',source:'sm-custom-lot',paint:{'fill-color':'#AEBC46','fill-opacity':0.12}});
+    smMap.addLayer({id:'sm-custom-lot-line',type:'line',source:'sm-custom-lot',paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[3,2]}});
+  }
+
+  // Process the lot data (same as smOnDraw)
+  const verts=coords.slice(0,-1);
+  const areaSqM=turf.area(poly);
+  const areaSqFt=areaSqM*10.7639;
+  const perimM=turf.length(turf.polygonToLine(poly.geometry),{units:'meters'});
+  const edges=[];
+  for(let i=0;i<verts.length;i++){
+    const a=verts[i],b=verts[(i+1)%verts.length];
+    const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+    const dFt=dM*3.28084;
+    const bearing=turf.bearing(turf.point(a),turf.point(b));
+    const dirs=['N','NE','E','SE','S','SW','W','NW'];
+    const compass=dirs[Math.round(((bearing%360+360)%360)/45)%8];
+    edges.push({id:String.fromCharCode(65+i),from:a,to:b,lengthFt:dFt,lengthM:dM,compass:compass});
+  }
+  smLotData={vertices:verts,geometry:poly.geometry,areaSqFt,areaSqM,perimFt:perimM*3.28084,edges,shape:verts.length+'pt polygon',vertexCount:verts.length};
+
+  // Save GPS coordinates for comparables search and report
+  const lotCentroid=turf.centroid(poly);
+  P.siteCoords={lat:lotCentroid.geometry.coordinates[1],lng:lotCentroid.geometry.coordinates[0]};
+  P.lot.gpsVerts=verts.map(v=>[v[0],v[1]]);
+
+  // Reset road labels to generic names for new lot location
+  if(P.roads&&P.roads.length>=2){
+    if(P.roads[0].label==='NORTH AVE'||P.roads[0].label==='SOUTH AVE') P.roads[0].label='STREET A (NORTH)';
+    if(P.roads[1].label==='NORTH AVE'||P.roads[1].label==='SOUTH AVE') P.roads[1].label='STREET B (SOUTH)';
+    // Try to auto-name from nearby streets via geocoding
+    try{
+      fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+P.siteCoords.lng+','+P.siteCoords.lat+'.json?types=address&access_token='+mapboxgl.accessToken)
+        .then(r=>r.json()).then(data=>{
+          if(data.features&&data.features.length>0){
+            const streetName=(data.features[0].text||'').toUpperCase();
+            if(streetName&&P.roads&&P.roads.length>=1){
+              P.roads[0].label=streetName;
+              try{rebuildAll();}catch(e){}
+            }
+          }
+        }).catch(()=>{});
+    }catch(e){}
+  }
+
+  // Immediately set a temporary name from coordinates
+  P.projectName='Site at '+P.siteCoords.lat.toFixed(4)+', '+P.siteCoords.lng.toFixed(4);
+  // Update BOTH the header title and the save input
+  const titleEl=document.getElementById('project-title');
+  if(titleEl) titleEl.textContent=P.projectName;
+  const nameInput=document.getElementById('project-name');
+  if(nameInput) nameInput.value=P.projectName;
+  document.title='OleaDev — '+P.projectName;
+
+  // Cancellation token: each new lot draw bumps this counter. Async fetches that
+  // started before a redraw will see their token mismatch and skip applying stale data.
+  if(typeof window._lotFetchToken === 'undefined') window._lotFetchToken = 0;
+  window._lotFetchToken++;
+  var _myToken = window._lotFetchToken;
+  function _isStale(){ return _myToken !== window._lotFetchToken; }
+
+  // Always clear and refresh comparables immediately (don't wait for geocode)
+  P.comparables=[];
+  try{
+    fetchNearbyComparables(P.siteCoords.lat,P.siteCoords.lng,'').then(()=>{
+      if(_isStale()){ return; } // user redrew lot — abandon results
+      smShowToast('Found '+P.comparables.length+' comparable development'+(P.comparables.length!==1?'s':'')+' within 3km','#AEBC46');
+      smUpdateCompCount();
+    }).catch(e=>{
+      if(_isStale()) return;
+      console.warn('Comparables error:',e);
+      smShowToast('Comparables search failed: '+(e && e.message || 'unknown'),'#c44');
+    });
+  }catch(e){console.error('fetchNearbyComparables threw:',e);smShowToast('Comparables error: '+(e && e.message || 'unknown'),'#c44');}
+
+  // Always detect zoning immediately (don't wait for geocode)
+  try{
+  detectZoning(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
+    if(_isStale()){ return; } // user redrew lot — discard old zoning
+    P.zoning=zoning;
+    autoSave();
+    if(zoning&&zoning.zone) smShowToast('Zoning detected: '+(zoning.zoneString||zoning.zone),'#4ecdc4');
+    const zi=document.getElementById('zoning-info');
+    // Verify the DOM node is still attached — tab switch may have recreated it
+    if(zi && document.contains(zi) && zoning.zone){
+      zi.style.display='block';
+      zi.innerHTML=`
+        <div style="color:#4ecdc4;font-weight:700;font-size:11px;margin-bottom:6px">📋 ZONING DETECTED — By-law 569-2013</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+          <div><span style="color:#888">Zone:</span> <b style="color:#AEBC46">${zoning.zoneString||zoning.zone}</b></div>
+          <div><span style="color:#888">Max FSI:</span> <b style="color:#AEBC46">${zoning.fsiLimit?zoning.fsiLimit+'×':'Site-specific'}</b></div>
+          <div><span style="color:#888">Height:</span> <b style="color:#AEBC46">${zoning.heightLimit?zoning.heightLimit+'m':'No overlay'}</b></div>
+          <div><span style="color:#888">Coverage:</span> <b style="color:#AEBC46">${zoning.coverage?(zoning.coverage*100).toFixed(0)+'%':'—'}</b></div>
+        </div>
+        <div style="margin-top:4px"><span style="color:#888">Permitted:</span> <span style="color:#eee">${zoning.permitted.join(', ')}</span></div>
+        ${zoning.exception?'<div style="margin-top:4px;color:#e8c87a">⚠ Exception #'+zoning.exceptionNo+' applies</div>':''}
+      `;
+    }
+    try{renderReport();}catch(e){}
+  }).catch(e=>{
+    if(_isStale()) return;
+    console.warn('Zoning detect error:',e);
+    smShowToast('Zoning detection failed','#c44');
+  });
+  }catch(e){console.error('detectZoning threw:',e);}
+
+  // Reverse geocode to get address and show confirmation banner
+  try{
+    fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+P.siteCoords.lng+','+P.siteCoords.lat+'.json?access_token='+mapboxgl.accessToken)
+      .then(r=>{
+        if(!r.ok) throw new Error('Geocode HTTP '+r.status);
+        return r.json();
+      }).then(data=>{
+        if(_isStale()) return; // user redrew lot — discard stale address
+        if(data.features&&data.features.length>0){
+          P.siteAddress=data.features[0].place_name||'';
+
+          // Always update project name to match new lot location
+          P.projectName=P.siteAddress.split(',')[0]||'Untitled Project';
+          const ti=document.getElementById('project-title');
+          if(ti) ti.textContent=P.projectName;
+          const ni=document.getElementById('project-name');
+          if(ni) ni.value=P.projectName;
+          document.title='OleaDev — '+P.projectName;
+
+          // Show address confirmation banner on the map
+          smShowAddressBanner(P.siteAddress, P.siteCoords);
+          autoSave();
+          try{renderReport();}catch(e){}
+        }
+      }).catch(e=>console.warn('Geocode error:',e));
+  }catch(e){}
+  autoSave();
+
+  // Update UI
+  smUpdateLotInfo(smLotData);
+
+  document.getElementById('sitemap-instructions').innerHTML='Lot captured · <span style="color:#AEBC46;font-weight:600">Draw buildings</span> or <span style="color:#AEBC46;font-weight:600">re-draw</span> lot';
+}
+
+function smCancelLotDraw(){
+  smLotDrawing=false;
+  smLotDrawPts=[];
+  if(smMap){smMap.getCanvas().style.cursor='';smMap.off('click',smLotClickHandler);}
+  smLotDrawMarkers.forEach(m=>m.remove());
+  smLotDrawMarkers=[];
+  try{if(smMap&&smMap.getLayer('sm-lot-draw-line'))smMap.removeLayer('sm-lot-draw-line');}catch(e){}
+  try{if(smMap&&smMap.getSource('sm-lot-draw-line'))smMap.removeSource('sm-lot-draw-line');}catch(e){}
+  document.getElementById('sitemap-instructions').innerHTML='Click <b style="color:#AEBC46">DRAW LOT</b> to start';
+}
+
+function smUpdateLotInfo(d){
+  document.getElementById('sitemap-lot-info').style.display='block';
+  updateOptimalMassingButton();
+  const clearBtn=document.getElementById('btn-clear-lot');
+  if(clearBtn) clearBtn.style.display='block';
+  document.getElementById('sitemap-metrics').innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
+      <span style="color:#777">Area:</span><span style="color:#AEBC46;font-weight:600">${Math.round(d.areaSqFt).toLocaleString()} sf</span>
+      <span style="color:#777">Metric:</span><span style="color:#AEBC46">${Math.round(d.areaSqM).toLocaleString()} m²</span>
+      <span style="color:#777">Acres:</span><span style="color:#AEBC46">${(d.areaSqFt/43560).toFixed(2)}</span>
+      <span style="color:#777">Perimeter:</span><span style="color:#AEBC46">${Math.round(d.perimFt)}' (${Math.round(d.perimFt*0.3048)}m)</span>
+    </div>`;
+  document.getElementById('sitemap-edges').innerHTML=d.edges.map(e=>`
+    <div style="display:flex;justify-content:space-between;padding:3px 6px;background:#1A1A1A;border-radius:3px;border-left:2px solid #AEBC46;margin-bottom:3px;font-size:11px">
+      <span style="color:#777">Edge ${e.id} <span style="color:#445">${e.compass}</span></span>
+      <span style="color:#AEBC46;font-weight:600">${e.lengthFt.toFixed(1)}'</span>
+    </div>`).join('');
+  const a=d.areaSqFt;
+  document.getElementById('sitemap-zoning').innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:10px;text-align:center">
+      <div style="background:#1A1A1A;border-radius:3px;padding:4px"><div style="color:#777">FSI 3x</div><div style="color:#AEBC46;font-weight:600">${Math.round(a*3).toLocaleString()} sf</div><div style="color:#445">${Math.round(a*3*0.82/650)} units</div></div>
+      <div style="background:#1A1A1A;border-radius:3px;padding:4px"><div style="color:#777">FSI 5x</div><div style="color:#AEBC46;font-weight:600">${Math.round(a*5).toLocaleString()} sf</div><div style="color:#445">${Math.round(a*5*0.82/650)} units</div></div>
+      <div style="background:#1A1A1A;border-radius:3px;padding:4px"><div style="color:#777">FSI 9x</div><div style="color:#AEBC46;font-weight:600">${Math.round(a*9).toLocaleString()} sf</div><div style="color:#445">${Math.round(a*9*0.82/650)} units</div></div>
+    </div>`;
+
+  // Add measurement labels on map (skip if map not initialized)
+  if(smMap){
+    smClearMarkers();
+    const edgeLabelFeatures=smLotData.edges.map(e=>({
+      type:'Feature',geometry:{type:'Point',coordinates:[(e.from[0]+e.to[0])/2,(e.from[1]+e.to[1])/2]},
+      properties:{label:e.lengthFt.toFixed(1)+"'"}
+    }));
+    const c=turf.centroid(turf.polygon([d.vertices.concat([d.vertices[0]])]));
+    edgeLabelFeatures.push({type:'Feature',geometry:{type:'Point',coordinates:c.geometry.coordinates},properties:{label:Math.round(d.areaSqFt).toLocaleString()+' sf'}});
+    const lotLabelData={type:'FeatureCollection',features:edgeLabelFeatures};
+    if(smMap.getSource('sm-lot-labels')){smMap.getSource('sm-lot-labels').setData(lotLabelData);}
+    else{
+      smMap.addSource('sm-lot-labels',{type:'geojson',data:lotLabelData});
+      smMap.addLayer({id:'sm-lot-labels',type:'symbol',source:'sm-lot-labels',
+        layout:{'text-field':['get','label'],'text-size':11,'text-font':['Open Sans Bold'],'text-allow-overlap':true,'text-ignore-placement':true},
+        paint:{'text-color':'#AEBC46','text-halo-color':'rgba(26,26,26,0.9)','text-halo-width':2}});
+    }
+  }
+}
+// ── Edit lot vertices: toggle draggable markers on/off ──
+let smEditLotActive=false;
+let smEditLotMarkers=[];
+
+function smToggleEditLot(){
+  if(!smLotData||!smMap){alert('Draw a lot first');return;}
+  if(smEditLotActive){smFinishEditLot();return;}
+  // Cancel any active drawing
+  if(smLotDrawing) smCancelLotDraw();
+  if(smBldgDrawing) smCancelBldgDraw();
+
+  smEditLotActive=true;
+  const btn=document.getElementById('btn-edit-lot');
+  btn.textContent='✅ DONE EDITING';
+  btn.style.background='#AEBC46';
+  btn.style.color='#111';
+
+  const verts=smLotData.vertices;
+  document.getElementById('sitemap-instructions').innerHTML='<b style="color:#AEBC46">Drag</b> any vertex to reshape the lot · Click <b style="color:#AEBC46">DONE EDITING</b> when finished';
+
+  // Place draggable markers on each vertex
+  for(let i=0;i<verts.length;i++){
+    const el=document.createElement('div');
+    el.style.cssText='width:16px;height:16px;background:#AEBC46;border:3px solid #fff;border-radius:50%;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.6)';
+    el.title='Drag to move vertex '+(i+1);
+    const marker=new mapboxgl.Marker({element:el,draggable:true,anchor:'center'})
+      .setLngLat(verts[i])
+      .addTo(smMap);
+    const idx=i;
+    marker.on('drag',()=>{
+      const ll=marker.getLngLat();
+      verts[idx]=[ll.lng,ll.lat];
+      smRedrawLotPoly();
+    });
+    marker.on('dragend',()=>{
+      smRecalcLotData();
+    });
+    smEditLotMarkers.push(marker);
+  }
+
+  // Also add midpoint markers to insert new vertices
+  smAddLotMidpointMarkers();
+}
+
+function smFinishEditLot(){
+  smEditLotActive=false;
+  smEditLotMarkers.forEach(m=>m.remove());
+  smEditLotMarkers=[];
+  const btn=document.getElementById('btn-edit-lot');
+  btn.textContent='📌 EDIT LOT';
+  btn.style.background='#444444';
+  btn.style.color='#AEBC46';
+  document.getElementById('sitemap-instructions').innerHTML='Lot captured · <span style="color:#AEBC46;font-weight:600">Draw buildings</span> or <span style="color:#AEBC46;font-weight:600">edit</span> lot';
+  // Final recalc
+  smRecalcLotData();
+}
+
+function smAddLotMidpointMarkers(){
+  // Remove old midpoints (keep vertex markers which are first N)
+  const vertCount=smLotData.vertices.length;
+  while(smEditLotMarkers.length>vertCount){
+    smEditLotMarkers.pop().remove();
+  }
+  const verts=smLotData.vertices;
+  for(let i=0;i<verts.length;i++){
+    const j=(i+1)%verts.length;
+    const mid=[(verts[i][0]+verts[j][0])/2,(verts[i][1]+verts[j][1])/2];
+    const el=document.createElement('div');
+    el.style.cssText='width:10px;height:10px;background:#AEBC4666;border:1px solid #AEBC46;border-radius:50%;cursor:pointer';
+    el.title='Click to add vertex';
+    const marker=new mapboxgl.Marker({element:el,anchor:'center'}).setLngLat(mid).addTo(smMap);
+    const insertIdx=i+1;
+    el.addEventListener('click',()=>{
+      verts.splice(insertIdx,0,[mid[0],mid[1]]);
+      smRecalcLotData();
+      // Re-enter edit mode with new vertex
+      smFinishEditLot();
+      smToggleEditLot();
+    });
+    smEditLotMarkers.push(marker);
+  }
+}
+
+function smRedrawLotPoly(){
+  const verts=smLotData.vertices;
+  const coords=[...verts,verts[0]];
+  const poly={type:'Feature',geometry:{type:'Polygon',coordinates:[coords]},properties:{}};
+  if(smMap.getSource('sm-custom-lot')){
+    smMap.getSource('sm-custom-lot').setData(poly);
+  }
+}
+
+function smRecalcLotData(){
+  const verts=smLotData.vertices;
+  const coords=[...verts,verts[0]];
+  const poly={type:'Feature',geometry:{type:'Polygon',coordinates:[coords]},properties:{}};
+  const areaSqM=turf.area(poly);
+  const areaSqFt=areaSqM*10.7639;
+  const perimM=turf.length(turf.polygonToLine(poly.geometry),{units:'meters'});
+  const edges=[];
+  for(let i=0;i<verts.length;i++){
+    const a=verts[i],b=verts[(i+1)%verts.length];
+    const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+    const dFt=dM*3.28084;
+    const bearing=turf.bearing(turf.point(a),turf.point(b));
+    const dirs=['N','NE','E','SE','S','SW','W','NW'];
+    const compass=dirs[Math.round(((bearing%360+360)%360)/45)%8];
+    edges.push({id:String.fromCharCode(65+i),from:a,to:b,lengthFt:dFt,lengthM:dM,compass:compass});
+  }
+  smLotData.geometry=poly.geometry;
+  smLotData.areaSqFt=areaSqFt;
+  smLotData.areaSqM=areaSqM;
+  smLotData.perimFt=perimM*3.28084;
+  smLotData.edges=edges;
+  smLotData.vertexCount=verts.length;
+  smLotData.shape=verts.length+'pt polygon';
+
+  smRedrawLotPoly();
+  smUpdateLotInfo(smLotData);
+  // Auto-sync to massing
+  smAutoSync();
+}
+
+function sitemapToggleStyle(){
+  if(!smMap)return;
+  smStyle=smStyle==='satellite'?'dark':'satellite';
+  smMap.setStyle(smStyle==='satellite'?'mapbox://styles/mapbox/satellite-streets-v12':'mapbox://styles/mapbox/dark-v11');
+}
+function sitemapToggle3D(){
+  if(!smMap)return;
+  smIs3D=!smIs3D;
+  smMap.easeTo({pitch:smIs3D?60:0,duration:800});
+}
+
+function smOnDraw(e){
+  const f=e.features[0];if(!f||f.geometry.type!=='Polygon')return;
+  const coords=f.geometry.coordinates[0];
+  const verts=coords.slice(0,-1);
+  const areaSqM=turf.area(f);
+  const areaSqFt=areaSqM*10.7639;
+  const perimM=turf.length(turf.polygonToLine(f.geometry),{units:'meters'});
+  const edges=[];
+  for(let i=0;i<verts.length;i++){
+    const a=verts[i],b=verts[(i+1)%verts.length];
+    const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+    const bearing=turf.bearing(turf.point(a),turf.point(b));
+    const dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    const compass=dirs[Math.round(((bearing%360+360)%360)/22.5)%16];
+    edges.push({id:String.fromCharCode(65+i),from:a,to:b,lengthM:dM,lengthFt:dM*3.28084,bearing,compass});
+  }
+  let shape='Irregular';
+  if(verts.length===4)shape='Rectangular';
+  else if(verts.length>=5&&verts.length<=8)shape='L-Shaped';
+  else if(verts.length===3)shape='Triangular';
+
+  smLotData={geometry:f.geometry,vertices:verts,areaSqFt,areaSqM,areaAcres:areaSqM/4046.86,
+    perimeterFt:perimM*3.28084,edges,shape,vertexCount:verts.length};
+
+  // Save GPS coordinates for comparables and report
+  const c2=turf.centroid(turf.polygon([verts.concat([verts[0]])]));
+  P.siteCoords={lat:c2.geometry.coordinates[1],lng:c2.geometry.coordinates[0]};
+  P.lot.gpsVerts=verts.map(v=>[v[0],v[1]]);
+  try{
+    fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+P.siteCoords.lng+','+P.siteCoords.lat+'.json?access_token='+mapboxgl.accessToken)
+      .then(r=>r.json()).then(data=>{
+        if(data.features&&data.features.length>0){P.siteAddress=data.features[0].place_name||'';autoSave();}
+      }).catch(()=>{});
+  }catch(e){}
+  autoSave();
+
+  smUpdatePanel();smAddMarkers();
+  document.getElementById('sitemap-lot-info').style.display='block';
+  updateOptimalMassingButton();
+  document.getElementById('sitemap-instructions').innerHTML='Lot captured · <span style="color:#AEBC46;font-weight:600">Drag</span> vertices to edit · <span style="color:#AEBC46;font-weight:600">Apply</span> to massing';
+}
+
+function smUpdatePanel(){
+  const d=smLotData;if(!d)return;
+  const nf=n=>Math.round(n).toLocaleString();
+  document.getElementById('sitemap-metrics').innerHTML=`
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">Area</span><span style="font-size:12px;font-weight:600;color:#AEBC46">${nf(d.areaSqFt)} sf</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">Area (m²)</span><span style="font-size:12px;font-weight:600">${nf(d.areaSqM)} m²</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">Acres</span><span style="font-size:12px;font-weight:600">${d.areaAcres.toFixed(3)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">Perimeter</span><span style="font-size:12px;font-weight:600">${nf(d.perimeterFt)} ft</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">Vertices</span><span style="font-size:12px;font-weight:600">${d.vertexCount}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="font-size:10px;color:#888">Shape</span><span style="font-size:12px;font-weight:600">${d.shape}</span></div>`;
+
+  document.getElementById('sitemap-edges').innerHTML=d.edges.map(e=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#1A1A1A;border-radius:4px;border-left:3px solid #AEBC46;margin-bottom:4px">
+      <div><div style="font-size:10px;color:#777">Edge ${e.id}</div><div style="font-size:9px;color:#445">${e.compass} (${e.bearing.toFixed(1)}°)</div></div>
+      <div style="font-size:13px;font-weight:600">${e.lengthFt.toFixed(1)}' <span style="font-size:10px;color:#777">(${e.lengthM.toFixed(1)}m)</span></div>
+    </div>`).join('');
+
+  document.getElementById('sitemap-zoning').innerHTML=`
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">GFA @ 3.0x FSI</span><span style="font-size:12px;font-weight:600">${nf(d.areaSqFt*3)} sf</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">GFA @ 5.0x FSI</span><span style="font-size:12px;font-weight:600">${nf(d.areaSqFt*5)} sf</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e1e2e"><span style="font-size:10px;color:#888">GFA @ 9.0x FSI</span><span style="font-size:12px;font-weight:600">${nf(d.areaSqFt*9)} sf</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="font-size:10px;color:#888">Est. Units (650sf avg)</span><span style="font-size:12px;font-weight:600;color:#AEBC46">~${Math.round(d.areaSqFt*9*0.92*0.80/650)}</span></div>`;
+}
+
+function smAddMarkers(){
+  smClearMarkers();if(!smLotData||!smMap)return;
+  smLotData.edges.forEach(e=>{
+    // Use Mapbox symbol layer for edge labels instead of DOM markers (won't block clicks)
+  });
+  // Edge labels as a symbol layer (non-interactive, won't block polygon drawing)
+  const edgeLabelFeatures=smLotData.edges.map(e=>({
+    type:'Feature',
+    geometry:{type:'Point',coordinates:[(e.from[0]+e.to[0])/2,(e.from[1]+e.to[1])/2]},
+    properties:{label:e.lengthFt.toFixed(1)+"'"}
+  }));
+  // Area label at centroid — also as symbol layer
+  const c=turf.centroid(turf.polygon([smLotData.vertices.concat([smLotData.vertices[0]])]));
+  edgeLabelFeatures.push({
+    type:'Feature',
+    geometry:{type:'Point',coordinates:c.geometry.coordinates},
+    properties:{label:Math.round(smLotData.areaSqFt).toLocaleString()+' sf'}
+  });
+  const lotLabelData={type:'FeatureCollection',features:edgeLabelFeatures};
+  if(smMap.getSource('sm-lot-labels')){
+    smMap.getSource('sm-lot-labels').setData(lotLabelData);
+  } else {
+    smMap.addSource('sm-lot-labels',{type:'geojson',data:lotLabelData});
+    smMap.addLayer({id:'sm-lot-labels',type:'symbol',source:'sm-lot-labels',
+      layout:{'text-field':['get','label'],'text-size':11,'text-font':['Open Sans Bold'],'text-allow-overlap':true,'text-ignore-placement':true},
+      paint:{'text-color':'#AEBC46','text-halo-color':'rgba(26,26,26,0.9)','text-halo-width':2}
+    });
+  }
+}
+function smClearMarkers(){
+  smMarkers.forEach(m=>m.remove());smMarkers=[];
+  try{if(smMap&&smMap.getLayer('sm-lot-labels'))smMap.removeLayer('sm-lot-labels');}catch(e){}
+  try{if(smMap&&smMap.getSource('sm-lot-labels'))smMap.removeSource('sm-lot-labels');}catch(e){}
+}
+
+/**
+ * Converts the drawn lot polygon from GPS coordinates to local XY feet,
+ * clears the current 3D massing, and applies the lot as the new project boundary.
+ */
+function sitemapApplyToMassing(){
+  if(!smLotData)return;
+
+  const lotArea=Math.round(smLotData.areaSqFt);
+  const edgeSummary=smLotData.edges.map(e=>`  ${e.id}: ${Math.round(e.lengthFt)}' (${e.compass})`).join('\n');
+  const msg=`NEW DEVELOPMENT SITE\n\nLot Area: ${lotArea.toLocaleString()} sf\nShape: ${smLotData.shape} (${smLotData.vertexCount} vertices)\n\nEdge dimensions:\n${edgeSummary}\n\n⚠️ This will CLEAR the current massing and start a fresh project.\nThe exact polygon you drew will become the lot boundary.\n\nProceed?`;
+  if(!confirm(msg)) return;
+
+  // ── Convert lat/lng polygon to local XY feet coordinates ──
+  // Use the northernmost vertex as origin (top of lot)
+  // X = east-west distance in feet, Z = north-south distance in feet (Z+ = south)
+  const verts=smLotData.vertices;
+
+  // Find the northernmost point (highest latitude) as origin
+  let originIdx=0;
+  verts.forEach((v,i)=>{ if(v[1]>verts[originIdx][1]) originIdx=i; });
+  const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
+
+  // Convert each vertex to feet relative to origin
+  const polyVerts=verts.map(v=>{
+    // X = east-west distance (positive = east)
+    const xM=turf.distance(turf.point([originLng,originLat]),turf.point([v[0],originLat]),{units:'meters'});
+    const xFt=xM*3.28084*(v[0]>originLng?1:-1);
+    // Z = north-south distance (positive = south)
+    const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,v[1]]),{units:'meters'});
+    const zFt=zM*3.28084*(v[1]<originLat?1:-1); // south = positive
+    return [Math.round(xFt), Math.round(zFt)];
+  });
+
+  // Ensure polygon is clockwise (for consistent rendering)
+  let crossSum=0;
+  for(let i=0;i<polyVerts.length;i++){
+    const j=(i+1)%polyVerts.length;
+    crossSum+=(polyVerts[j][0]-polyVerts[i][0])*(polyVerts[j][1]+polyVerts[i][1]);
+  }
+  if(crossSum<0) polyVerts.reverse(); // make clockwise
+
+  // Compute bounding box for lot parameters (used by volume clamping)
+  const allX=polyVerts.map(v=>v[0]), allZ=polyVerts.map(v=>v[1]);
+  const minX=Math.min(...allX), maxX=Math.max(...allX);
+  const minZ=Math.min(...allZ), maxZ=Math.max(...allZ);
+  const lotWidth=maxX-minX, lotDepth=maxZ-minZ;
+
+  // Store the polygon vertices directly — lotVerts() will use these
+  P.lot={
+    polyVerts: polyVerts,
+    // Keep parametric values as fallback/display (approximate from bounding box)
+    front: lotWidth,
+    upperRight: Math.round(lotDepth*0.5),
+    stepEast: 0,
+    lowerRight: Math.round(lotDepth*0.5),
+    upperLeft: Math.round(lotDepth*0.7),
+    notchWest: 0,
+    lowerLeft: Math.round(lotDepth*0.3),
+    rear: lotWidth
+  };
+
+  // Reset everything else
+  P.set={front:10,stepback:3,sideE:12,sideW:4,rear:10};
+  P.flr={gf:15,typ:10};
+  P.vols=[];
+  P.pf={
+    units:[
+      {type:'Studio',size:425,count:0,psf:1100},
+      {type:'1-Bedroom',size:550,count:0,psf:1075},
+      {type:'1-Bed+Den',size:630,count:0,psf:1050},
+      {type:'2-Bedroom',size:775,count:0,psf:1025},
+      {type:'2-Bed+Den',size:875,count:0,psf:1000},
+      {type:'3-Bedroom',size:1050,count:0,psf:975}
+    ],
+    comm:[
+      {label:'Grocery Anchor',pct:0.7,rent:22,cap:0.06},
+      {label:'CRU Retail / F&B',pct:0.2,rent:35,cap:0.06},
+      {label:'Service / Personal',pct:0.1,rent:28,cap:0.065}
+    ],
+    parkPrice:60000,lockerPrice:8000,parkRatio:0.3,lockerRatio:0.56,
+    landPrice:10000000,lttRate:0.025,ddCost:350000,
+    hc:{shoring:18,structure:68,envelope:85,mech:38,elec:22,fitResi:55,fitComm:12,commShell:8,elevators:6,siteWorks:5,parking:28,groceryTI:4.5},
+    sc:{ae:0.065,pm:0.03,legal:0.015,insurance:0.012,marketing:0.04,permits:0.008,contingency:0.105},
+    dcPerUnit:45000,dcCommPerSF:44,s37PerUnit:7300,parkland:2200000,
+    ltc:0.65,intRate:0.065,drawMonths:24,loanFeePct:0.01,
+    autoScaleUnits:true,baseResiGFA:0
+  };
+  P.core={elevX:0,elevZ:0,elevDir:'ns',elevAngle:0,numElevators:0,stairs:[]};
+  P.roads=[];
+  P.landscape=[];
+
+  // Rebuild all panels
+  buildLotPanel();
+  buildSetbackPanel();
+  buildRoadsPanel();
+  buildLandscapePanel();
+  buildFloorPanel();
+  buildVolPanel();
+  rebuildAll();
+  switchTab('massing');
+}
+
+
+//  MAP-BASED MASSING — place/drag/rotate volumes on satellite
+// ═══════════════════════════════════════════════════════════
+let smVolumes=[];
+let smVolNextId=1;
+let smSelectedVolId=null; // for keyboard rotation
+const smVolColors=['#5588bb','#77aa99','#aa7788','#8877aa','#bb8855','#55aa77','#aa5577','#7788bb'];
+
+// Keyboard: Shift+Arrow to rotate selected volume
+document.addEventListener('keydown',(e)=>{
+  if(!smSelectedVolId||!e.shiftKey)return;
+  const vol=smVolumes.find(v=>v.id===smSelectedVolId);
+  if(!vol)return;
+  let step=e.ctrlKey?1:5; // Ctrl+Shift = 1°, Shift = 5°
+  if(e.key==='ArrowLeft'){vol.angle=(vol.angle-step+360)%360;e.preventDefault();}
+  else if(e.key==='ArrowRight'){vol.angle=(vol.angle+step)%360;e.preventDefault();}
+  else return;
+  if(vol.shapeType){
+    smRegenerateShapePoly(vol);
+    smConformEdges(vol);
+    smUpdateShapeGeo(vol);
+    if(_smShapeEditId===vol.id) smRepositionResizeHandles(vol);
+  }
+  smDrawVolume(vol);
+  smRenderVolPanel();
+  smAutoSync();
+});
+// Close shape menu on outside click
+document.addEventListener('click',(e)=>{
+  if(_smShapeMenuOpen&&!e.target.closest('#shape-builder-wrap')){
+    _smShapeMenuOpen=false;
+    const m=document.getElementById('sm-shape-menu');if(m)m.style.display='none';
+  }
+});
+
+// ── Polygon drawing mode for freeform building footprints ──
+let smBldgDrawing=false;
+let smBldgDrawPts=[];
+let smBldgDrawMarkers=[];
+let smBldgDrawLine=null;
+
+/**
+ * Enters building-footprint drawing mode on the site map, allowing the user
+ * to click vertices that define a building polygon with edge-snapping to the lot.
+ */
+function smDrawBuilding(){
+  if(!smLotData||!smMap)return alert('Draw a lot first');
+  if(smBldgDrawing){smCancelBldgDraw();return;}
+  // Cancel lot drawing if active
+  if(smLotDrawing) smCancelLotDraw();
+  smBldgDrawing=true;
+  smBldgDrawPts=[];
+  document.getElementById('btn-draw-bldg').textContent='CANCEL DRAW';
+  document.getElementById('btn-draw-bldg').style.background='#c44';
+  document.getElementById('btn-draw-bldg').style.color='#fff';
+  document.getElementById('sm-draw-hint').style.display='block';
+  // Show snap-to-lot option if this is the first building
+  const isFirst=smVolumes.length===0;
+  const snapBtn=isFirst?'<button onclick="smSnapToLot()" style="margin-top:4px;margin-right:6px;background:#4ecdc4;color:#111;border:none;border-radius:3px;padding:4px 16px;cursor:pointer;font-weight:700;font-size:11px">⬡ SNAP TO LOT</button>':'';
+  document.getElementById('sm-draw-hint').innerHTML='<b>Click</b> to place vertices (snaps to lot edges within 3m) · <b>Click first vertex</b> or press <b>CLOSE</b> to finish<br>'+snapBtn+'<button onclick="smCloseBldgPoly()" style="margin-top:4px;background:#AEBC46;color:#111;border:none;border-radius:3px;padding:4px 16px;cursor:pointer;font-weight:700;font-size:11px">CLOSE POLYGON</button>';
+  smMap.getCanvas().style.cursor='crosshair';
+  // Only use click — NO dblclick handler (avoids all conflicts with Mapbox Draw)
+  smMap.on('click',smBldgClickHandler);
+}
+
+// Snap first building to lot polygon (uses lot vertices directly)
+function smSnapToLot(){
+  if(!smLotData||!smLotData.vertices||smLotData.vertices.length<3)return alert('No lot polygon found');
+  // Use the lot polygon vertices as building vertices
+  smBldgDrawPts=[...smLotData.vertices];
+  smCloseBldgPoly();
+}
+
+// Snap a point to the nearest lot vertex or lot edge if within threshold
+function smSnapToLotPt(pt){
+  if(!smLotData||!smLotData.vertices)return pt;
+  const snapThresholdM=3; // snap within 3 metres
+  const lotVerts=smLotData.vertices;
+
+  // Check each lot vertex
+  let bestDist=Infinity, bestPt=pt;
+  for(const lv of lotVerts){
+    const d=turf.distance(turf.point(pt),turf.point(lv),{units:'meters'});
+    if(d<bestDist){bestDist=d;bestPt=lv;}
+  }
+  if(bestDist<snapThresholdM) return [...bestPt];
+
+  // Check each lot edge — find nearest point on edge
+  for(let i=0;i<lotVerts.length;i++){
+    const a=lotVerts[i], b=lotVerts[(i+1)%lotVerts.length];
+    const nearest=turf.nearestPointOnLine(turf.lineString([a,b]),turf.point(pt));
+    const d=turf.distance(turf.point(pt),nearest,{units:'meters'});
+    if(d<bestDist){bestDist=d;bestPt=nearest.geometry.coordinates;}
+  }
+  if(bestDist<snapThresholdM) return [...bestPt];
+
+  return pt; // no snap
+}
+
+function smCancelBldgDraw(){
+  smBldgDrawing=false;
+  smBldgDrawPts=[];
+  const btn=document.getElementById('btn-draw-bldg');
+  if(btn){btn.textContent='✏️ DRAW BUILDING';btn.style.background='';btn.style.color='';}
+  const hint=document.getElementById('sm-draw-hint');
+  if(hint)hint.style.display='none';
+  if(smMap){
+    smMap.getCanvas().style.cursor='';
+    smMap.off('click',smBldgClickHandler);
+  }
+  smBldgDrawMarkers.forEach(m=>m.remove());
+  smBldgDrawMarkers=[];
+  try{if(smMap&&smMap.getLayer('sm-bldg-draw-line'))smMap.removeLayer('sm-bldg-draw-line');}catch(e){}
+  try{if(smMap&&smMap.getSource('sm-bldg-draw-line'))smMap.removeSource('sm-bldg-draw-line');}catch(e){}
+}
+
+// Close building polygon — called by button or by clicking near first vertex
+function smCloseBldgPoly(){
+  if(!smBldgDrawing||smBldgDrawPts.length<3){alert('Need at least 3 points');return;}
+  const coords=[...smBldgDrawPts,smBldgDrawPts[0]];
+  const poly=turf.polygon([coords]);
+  const areaSqM=turf.area(poly);
+  const areaSqFt=areaSqM*10.7639;
+  const centroid=turf.centroid(poly);
+  const [cLng,cLat]=centroid.geometry.coordinates;
+  const bbox=turf.bbox(poly);
+  const bboxWidthM=turf.distance(turf.point([bbox[0],bbox[1]]),turf.point([bbox[2],bbox[1]]),{units:'meters'});
+  const bboxDepthM=turf.distance(turf.point([bbox[0],bbox[1]]),turf.point([bbox[0],bbox[3]]),{units:'meters'});
+  const color=smVolColors[(smVolNextId-1)%smVolColors.length];
+  const vol={
+    id:smVolNextId++,
+    lngLat:[cLng,cLat],
+    widthFt:Math.round(bboxWidthM*3.28084), depthFt:Math.round(bboxDepthM*3.28084),
+    storeys:8,
+    angle:0, commGF:1, color:color,
+    name:String.fromCharCode(64+smVolumes.length+1),
+    windows:1, winSpacing:3,
+    balconies:1, balcEvery:2, balcDepth:4,
+    balcFront:1, balcBack:1, balcLeft:0, balcRight:0,
+    customPoly:coords, customAreaSF:Math.round(areaSqFt)
+  };
+  smConformEdges(vol); // conform edges to nearby lot/building edges
+  smVolumes.push(vol);
+  smSelectedVolId=vol.id;
+  smCancelBldgDraw();
+  smDrawVolume(vol);
+  smRenderVolPanel();
+  smAutoSync();
+}
+
+function smBldgClickHandler(e){
+  if(!smBldgDrawing||smLotDrawing)return;
+  let pt=[e.lngLat.lng,e.lngLat.lat];
+
+  // Snap to lot vertices/edges
+  pt=smSnapToLotPt(pt);
+
+  // Also snap to existing building vertices (for subsequent buildings)
+  if(smVolumes.length>0){
+    let bestD=Infinity, bestP=null;
+    smVolumes.forEach(vol=>{
+      if(!vol.customPoly)return;
+      vol.customPoly.forEach(vp=>{
+        const d=turf.distance(turf.point(pt),turf.point(vp),{units:'meters'});
+        if(d<3&&d<bestD){bestD=d;bestP=[...vp];}
+      });
+    });
+    if(bestP) pt=bestP;
+  }
+
+  // If we have 3+ points and click near the FIRST vertex → close the polygon
+  if(smBldgDrawPts.length>=3){
+    const first=smBldgDrawPts[0];
+    const distM=turf.distance(turf.point(pt),turf.point(first),{units:'meters'});
+    if(distM<3){ // within 3 meters of first vertex = close
+      smCloseBldgPoly();
+      return;
+    }
+  }
+
+  smBldgDrawPts.push(pt);
+
+  // Vertex marker (orange-red to distinguish from lot polygon; first vertex is larger)
+  const isFirst=smBldgDrawPts.length===1;
+  const el=document.createElement('div');
+  el.style.cssText=`width:${isFirst?16:12}px;height:${isFirst?16:12}px;background:${isFirst?'#AEBC46':'#ff6644'};border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.5);${isFirst?'cursor:pointer':''}`;
+  if(isFirst) el.title='Click here to close polygon';
+  const m=new mapboxgl.Marker({element:el,anchor:'center'}).setLngLat(pt).addTo(smMap);
+  if(isFirst){
+    el.addEventListener('click',(ev)=>{ev.stopPropagation();if(smBldgDrawPts.length>=3)smCloseBldgPoly();});
+  }
+  smBldgDrawMarkers.push(m);
+
+  // Update preview line
+  smUpdateBldgDrawLine();
+}
+
+function smUpdateBldgDrawLine(){
+  if(smBldgDrawPts.length<2)return;
+  const data={type:'Feature',geometry:{type:'LineString',coordinates:smBldgDrawPts}};
+  if(smMap.getSource('sm-bldg-draw-line')){
+    smMap.getSource('sm-bldg-draw-line').setData(data);
+  } else {
+    smMap.addSource('sm-bldg-draw-line',{type:'geojson',data:data});
+    smMap.addLayer({id:'sm-bldg-draw-line',type:'line',source:'sm-bldg-draw-line',paint:{'line-color':'#ff6644','line-width':3}});
+  }
+}
+
+// ── Edit existing freeform polygon vertices ──
+let smEditingVolId=null;
+let smEditMarkers=[];
+
+function smEditBldgPoly(volId){
+  const vol=smVolumes.find(v=>v.id===volId);
+  if(!vol||!vol.customPoly)return;
+
+  // If already editing this one, finish
+  if(smEditingVolId===volId){smFinishEditPoly();return;}
+  // If editing another, finish that first
+  if(smEditingVolId)smFinishEditPoly();
+
+  smEditingVolId=volId;
+  smSelectedVolId=volId;
+  const coords=vol.customPoly;
+
+  // Place draggable markers on each vertex (skip closing vertex)
+  for(let i=0;i<coords.length-1;i++){
+    const el=document.createElement('div');
+    el.style.cssText=`width:14px;height:14px;background:#AEBC46;border:2px solid #fff;border-radius:50%;cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,0.6)`;
+    el.title='Drag to move vertex '+(i+1);
+    const marker=new mapboxgl.Marker({element:el,draggable:true,anchor:'center'})
+      .setLngLat(coords[i])
+      .addTo(smMap);
+    const idx=i;
+    marker.on('drag',()=>{
+      const ll=marker.getLngLat();
+      coords[idx]=[ll.lng,ll.lat];
+      coords[coords.length-1]=[coords[0][0],coords[0][1]]; // keep closed
+      // Recalc area
+      try{
+        const poly=turf.polygon([coords]);
+        vol.customAreaSF=Math.round(turf.area(poly)*10.7639);
+        const c=turf.centroid(poly);
+        vol.lngLat=[c.geometry.coordinates[0],c.geometry.coordinates[1]];
+      }catch(e){}
+      smDrawVolume(vol);
+    });
+    marker.on('dragend',()=>{
+      smRenderVolPanel();
+      smAutoSync();
+    });
+    smEditMarkers.push(marker);
+  }
+
+  // Add midpoint markers for inserting new vertices
+  for(let i=0;i<coords.length-1;i++){
+    const j=(i+1)%(coords.length-1);
+    if(j===0&&i===coords.length-2) continue;
+    const mid=[(coords[i][0]+coords[i+1][0])/2,(coords[i][1]+coords[i+1][1])/2];
+    const el=document.createElement('div');
+    el.style.cssText='width:10px;height:10px;background:#AEBC4666;border:1px solid #AEBC46;border-radius:50%;cursor:pointer';
+    el.title='Click to add vertex here';
+    const marker=new mapboxgl.Marker({element:el,anchor:'center'}).setLngLat(mid).addTo(smMap);
+    const insertIdx=i+1;
+    el.addEventListener('click',()=>{
+      coords.splice(insertIdx,0,[mid[0],mid[1]]);
+      smFinishEditPoly();
+      smEditBldgPoly(volId); // re-enter edit with new vertex
+      smRenderVolPanel();
+      smAutoSync();
+    });
+    smEditMarkers.push(marker);
+  }
+
+  smRenderVolPanel();
+}
+
+function smFinishEditPoly(){
+  smEditMarkers.forEach(m=>m.remove());
+  smEditMarkers=[];
+  smEditingVolId=null;
+}
+
+function smResetToRect(volId){
+  const vol=smVolumes.find(v=>v.id===volId);
+  if(!vol)return;
+  if(smEditingVolId===volId) smFinishEditPoly();
+  if(_smShapeEditId===volId) smExitShapeEdit();
+  // Clean up old layers fully, then redraw as rect
+  smRemoveVolGeo(vol);
+  vol.customPoly=null;
+  vol.customAreaSF=null;
+  vol.shapeType=null;
+  vol.shapeParams=null;
+  smDrawVolume(vol);
+  smRenderVolPanel();
+  smAutoSync();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SHAPE BUILDER — parametric building shapes
+// ═══════════════════════════════════════════════════════════
+let _smShapeMenuOpen=false;
+let _smShapeHandles=[];    // resize/rotate markers on map
+let _smShapeRotLine=null;  // rotation handle connecting line
+let _smShapeEditId=null;   // volume ID currently in shape-edit mode
+
+function smToggleShapeMenu(){
+  if(!smLotData||!smMap){alert('Draw a lot first');return;}
+  _smShapeMenuOpen=!_smShapeMenuOpen;
+  const menu=document.getElementById('sm-shape-menu');
+  if(!menu)return;
+
+  const opt=(type,svg,title,sub)=>`<div onclick="smAddShape('${type}')" class="sm-shape-opt">${svg}<div><div style="color:#eee;font-weight:600;font-size:11px">${title}</div><div style="color:#666;font-size:9px">${sub}</div></div></div>`;
+  menu.innerHTML=`
+    <div style="font-size:9px;color:#AEBC46;font-weight:700;letter-spacing:1px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #333">SHAPE BUILDER</div>
+    ${opt('rect','<svg width="28" height="20" viewBox="0 0 28 20"><rect x="2" y="2" width="24" height="16" fill="none" stroke="#AEBC46" stroke-width="1.5" rx="1"/></svg>','Rectangle','Width × Depth')}
+    ${opt('square','<svg width="28" height="20" viewBox="0 0 28 20"><rect x="4" y="1" width="18" height="18" fill="none" stroke="#4ecdc4" stroke-width="1.5" rx="1"/></svg>','Square','Equal sides')}
+    ${opt('lshape','<svg width="28" height="20" viewBox="0 0 28 20"><path d="M3,1 L13,1 L13,10 L25,10 L25,19 L3,19 Z" fill="none" stroke="#ff9966" stroke-width="1.5"/></svg>','L-Shape','Podium wrap / corner')}
+    ${opt('ushape','<svg width="28" height="20" viewBox="0 0 28 20"><path d="M2,1 L10,1 L10,12 L18,12 L18,1 L26,1 L26,19 L2,19 Z" fill="none" stroke="#b088cc" stroke-width="1.5"/></svg>','U-Shape','Courtyard building')}
+    ${opt('tshape','<svg width="28" height="20" viewBox="0 0 28 20"><path d="M9,19 L9,8 L2,8 L2,1 L26,1 L26,8 L19,8 L19,19 Z" fill="none" stroke="#e8c87a" stroke-width="1.5"/></svg>','T-Shape','Tower + wing')}`;
+  menu.style.display=_smShapeMenuOpen?'block':'none';
+}
+
+// ── Generate local (meter) vertices for each shape type ──
+function smShapeLocalVerts(type,p){
+  // Returns array of [x,y] in meters, CCW, NOT closed (no duplicate last vertex)
+  // Origin at shape centroid
+  let pts=[];
+  if(type==='rect'){
+    const hw=p.w/2, hd=p.d/2;
+    pts=[[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]];
+  } else if(type==='square'){
+    const h=p.s/2;
+    pts=[[-h,-h],[h,-h],[h,h],[-h,h]];
+  } else if(type==='lshape'){
+    // L: main body W×D, wing extends from top-right corner
+    // p.w=total width, p.d=total depth, p.ww=wing width (left arm), p.wd=wing depth (bottom bar height)
+    const W=p.w, D=p.d, ww=p.ww, wd=p.wd;
+    pts=[[0,0],[W,0],[W,wd],[ww,wd],[ww,D],[0,D]];
+  } else if(type==='ushape'){
+    // U: two wings + base, open at top
+    // p.w=total width, p.d=total depth, p.cw=courtyard width, p.cd=courtyard depth
+    const W=p.w, D=p.d, cw=p.cw, cd=p.cd;
+    const wingW=(W-cw)/2;
+    pts=[[0,0],[W,0],[W,D],[W-wingW,D],[W-wingW,D-cd],[wingW,D-cd],[wingW,D],[0,D]];
+  } else if(type==='tshape'){
+    // T: top bar + stem going down
+    // p.tw=top bar width, p.td=top bar depth, p.sw=stem width, p.sd=stem depth
+    const tw=p.tw, td=p.td, sw=p.sw, sd=p.sd;
+    const stemL=(tw-sw)/2, stemR=stemL+sw;
+    pts=[[stemL,0],[stemR,0],[stemR,sd],[tw,sd],[tw,sd+td],[0,sd+td],[0,sd],[stemL,sd]];
+  }
+  // Center on centroid
+  if(pts.length>0){
+    let cx=0,cy=0;
+    pts.forEach(p=>{cx+=p[0];cy+=p[1];});
+    cx/=pts.length; cy/=pts.length;
+    pts=pts.map(p=>[p[0]-cx, p[1]-cy]);
+  }
+  return pts;
+}
+
+// ── Convert local shape verts → GPS polygon (with rotation) ──
+function smShapeToGPS(localPts, centerLngLat, angleDeg){
+  const [cLng,cLat]=centerLngLat;
+  const rad=angleDeg*Math.PI/180;
+  const mPerLat=111132;
+  const mPerLng=111132*Math.cos(cLat*Math.PI/180);
+  const gpsPts=localPts.map(([x,y])=>{
+    const rx=x*Math.cos(rad)-y*Math.sin(rad);
+    const ry=x*Math.sin(rad)+y*Math.cos(rad);
+    return [cLng+rx/mPerLng, cLat+ry/mPerLat];
+  });
+  gpsPts.push([...gpsPts[0]]); // close polygon
+  return gpsPts;
+}
+
+// ── Regenerate a shape volume's polygon from its params ──
+function smRegenerateShapePoly(vol, skipArea){
+  if(!vol.shapeType||!vol.shapeParams)return;
+  const local=smShapeLocalVerts(vol.shapeType, vol.shapeParams);
+  const gps=smShapeToGPS(local, vol.lngLat, vol.angle||0);
+  vol.customPoly=gps;
+  if(!skipArea){
+    const poly=turf.polygon([gps]);
+    vol.customAreaSF=Math.round(turf.area(poly)*10.7639);
+  }
+}
+
+// ── Default shape params based on lot size ──
+function smDefaultShapeParams(type){
+  // Base on lot dimensions if available
+  let lotW=25, lotD=35; // default meters
+  if(smLotData){
+    const bbox=turf.bbox(smLotData.geometry);
+    lotW=turf.distance(turf.point([bbox[0],bbox[1]]),turf.point([bbox[2],bbox[1]]),{units:'meters'});
+    lotD=turf.distance(turf.point([bbox[0],bbox[1]]),turf.point([bbox[0],bbox[3]]),{units:'meters'});
+  }
+  let w=Math.round(lotW*0.6);
+  let d=Math.round(lotD*0.5);
+  if(type==='rect') return {w:w, d:d};
+  if(type==='square'){const s=Math.round(Math.min(w,d)*0.9); return {s:s};}
+  if(type==='lshape') return {w:w, d:d, ww:Math.round(w*0.4), wd:Math.round(d*0.5)};
+  if(type==='ushape') return {w:w, d:d, cw:Math.round(w*0.4), cd:Math.round(d*0.4)};
+  if(type==='tshape') return {tw:w, td:Math.round(d*0.35), sw:Math.round(w*0.4), sd:Math.round(d*0.5)};
+  return {w:20, d:15};
+}
+
+// ── Translate a freehand (non-shape) custom polygon when its center is dragged ──
+function smTranslateCustomPoly(vol, newCenter){
+  if(!vol.customPoly||vol.customPoly.length<3)return;
+  const oldC=vol._prevLngLat||vol.lngLat;
+  const dx=newCenter[0]-oldC[0], dy=newCenter[1]-oldC[1];
+  if(Math.abs(dx)<1e-12&&Math.abs(dy)<1e-12)return;
+  vol.customPoly=vol.customPoly.map(p=>[p[0]+dx,p[1]+dy]);
+  vol._prevLngLat=[...newCenter];
+}
+
+// Center snap removed — edge conforming handles all alignment now
+
+// Nearest point on segment (ax,ay)-(bx,by) to point (px,py)
+function nearestOnSeg(ax,ay,bx,by,px,py){
+  const dx=bx-ax, dy=by-ay;
+  const len2=dx*dx+dy*dy;
+  if(len2<1e-10)return [ax,ay];
+  let t=((px-ax)*dx+(py-ay)*dy)/len2;
+  t=Math.max(0,Math.min(1,t));
+  return [ax+t*dx, ay+t*dy];
+}
+
+// ═══════════════════════════════════════════════════════════
+//  EDGE CONFORMING — reshape building edges to match nearby
+//  lot edges or other building edges for seamless alignment
+// ═══════════════════════════════════════════════════════════
+const SM_CONFORM_DIST=3; // metres — edge conform threshold
+
+function smConformEdges(vol){
+  if(!vol.customPoly||vol.customPoly.length<4)return;
+  const [refLng,refLat]=vol.lngLat;
+  const mPerLat=111132, mPerLng=111132*Math.cos(refLat*Math.PI/180);
+  const toM=p=>[(p[0]-refLng)*mPerLng,(p[1]-refLat)*mPerLat];
+  const toGPS=m=>[m[0]/mPerLng+refLng, m[1]/mPerLat+refLat];
+  const dist2=(a,b)=>(a[0]-b[0])**2+(a[1]-b[1])**2;
+  const dist=(a,b)=>Math.sqrt(dist2(a,b));
+
+  // ── Collect target edges + vertices (lot + other buildings) ──
+  const tSegs=[]; // {ax,ay,bx,by}
+  const tVerts=[]; // [mx,my]
+  if(smLotData&&smLotData.vertices){
+    const lv=smLotData.vertices;
+    for(let i=0;i<lv.length;i++){
+      const a=toM(lv[i]), b=toM(lv[(i+1)%lv.length]);
+      tSegs.push({ax:a[0],ay:a[1],bx:b[0],by:b[1]});
+      tVerts.push(a);
+    }
+  }
+  smVolumes.forEach(ov=>{
+    if(ov.id===vol.id||!ov.customPoly||ov.customPoly.length<3)return;
+    for(let i=0;i<ov.customPoly.length-1;i++){
+      const a=toM(ov.customPoly[i]),b=toM(ov.customPoly[i+1]);
+      tSegs.push({ax:a[0],ay:a[1],bx:b[0],by:b[1]});
+      tVerts.push(a);
+    }
+  });
+  if(tSegs.length===0)return;
+
+  // ── Step 1: Snap each volume vertex to nearest target edge if within threshold ──
+  let pts=vol.customPoly.slice(0,-1).map(toM); // open ring in metres
+  let snapped=pts.map(p=>{
+    let best=Infinity, bp=null;
+    for(const s of tSegs){
+      const np=nearestOnSeg(s.ax,s.ay,s.bx,s.by,p[0],p[1]);
+      const d=dist(p,np);
+      if(d<best){best=d;bp=np;}
+    }
+    return(best<SM_CONFORM_DIST&&bp)?[...bp]:[...p];
+  });
+
+  // ── Step 2: Insert target vertices that fall within threshold of a volume edge ──
+  // This handles non-straight lot lines — kink points get added to the polygon
+  let result=[];
+  for(let i=0;i<snapped.length;i++){
+    result.push(snapped[i]);
+    const ni=(i+1)%snapped.length;
+    const a=snapped[i], b=snapped[ni];
+    const edgeLen=dist(a,b);
+    if(edgeLen<0.3)continue; // skip tiny edges
+
+    // Find target vertices close to this volume edge
+    const inserts=[];
+    for(const tv of tVerts){
+      const np=nearestOnSeg(a[0],a[1],b[0],b[1],tv[0],tv[1]);
+      const d=dist(tv,np);
+      if(d<SM_CONFORM_DIST){
+        // Parameter along edge for ordering
+        const dx=b[0]-a[0], dy=b[1]-a[1];
+        const len2=dx*dx+dy*dy;
+        if(len2<0.01)continue;
+        const t=((tv[0]-a[0])*dx+(tv[1]-a[1])*dy)/len2;
+        if(t>0.03&&t<0.97){ // not too close to endpoints
+          // Check it's not duplicating an existing vertex
+          const dToA=dist(tv,a), dToB=dist(tv,b);
+          if(dToA>0.5&&dToB>0.5){
+            inserts.push({t,pt:[...tv]});
+          }
+        }
+      }
+    }
+    // Sort by parameter and deduplicate
+    inserts.sort((x,y)=>x.t-y.t);
+    for(const ins of inserts){
+      const last=result[result.length-1];
+      if(dist(ins.pt,last)>0.4)result.push(ins.pt);
+    }
+  }
+
+  // ── Convert back to GPS and close the polygon ──
+  vol.customPoly=result.map(toGPS);
+  vol.customPoly.push([...vol.customPoly[0]]);
+}
+
+// ── Add shape to map ──
+function smAddShape(type){
+  if(!smLotData||!smMap)return alert('Draw a lot first');
+  _smShapeMenuOpen=false;
+  document.getElementById('sm-shape-menu').style.display='none';
+
+  const c=turf.centroid(smLotData.geometry);
+  const [lng,lat]=c.geometry.coordinates;
+  const color=smVolColors[(smVolNextId-1)%smVolColors.length];
+  const params=smDefaultShapeParams(type);
+
+  const vol={
+    id:smVolNextId++,
+    lngLat:[lng,lat],
+    widthFt:0, depthFt:0,
+    storeys:8,
+    angle:0, commGF:1,
+    color:color,
+    name:String.fromCharCode(64+smVolumes.length+1),
+    windows:1, winSpacing:3,
+    balconies:1, balcEvery:2, balcDepth:4,
+    balcFront:1, balcBack:1, balcLeft:0, balcRight:0,
+    shapeType:type,
+    shapeParams:params
+  };
+
+  // Generate polygon + conform to nearby edges
+  smRegenerateShapePoly(vol);
+  smConformEdges(vol);
+
+  smVolumes.push(vol);
+  smSelectedVolId=vol.id;
+  smDrawVolume(vol);
+  smRenderVolPanel();
+  smAutoSync();
+
+  // Auto-enter shape edit mode (show handles)
+  smEnterShapeEdit(vol.id);
+  smShowToast('Shape placed — drag handles to resize, drag circle to rotate','#AEBC46');
+}
+
+// Legacy rectangle add (now goes through shape builder)
+function smAddVolume(){
+  smAddShape('rect');
+}
+
+// Add a new building volume
+function smAddPhase(){
+  smAddShape('rect');
+}
+
+// Phase button not used for residential — keep hidden
+function smUpdatePhaseButton(){
+  const wrap=document.getElementById('sm-add-phase-wrap');
+  if(!wrap)return;
+  wrap.style.display='none';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SHAPE EDIT MODE — rotation handle + resize handles on map
+// ═══════════════════════════════════════════════════════════
+
+// Lightweight polygon update — only updates GeoJSON data, no marker/layer recreation
+// skipDims=true during drag moves (dimensions don't change, only position does)
+function smUpdateShapeGeo(vol, skipDims){
+  if(!smMap)return;
+  const sourceId='smvol-'+vol.id;
+  const poly=vol.customPoly
+    ?{type:'Feature',geometry:{type:'Polygon',coordinates:[vol.customPoly]},properties:{id:vol.id}}
+    :smVolToGeoJSON(vol);
+  try{if(smMap.getSource(sourceId))smMap.getSource(sourceId).setData(poly);}catch(e){}
+  // Update dimension labels (skip during drag moves for performance)
+  if(skipDims)return;
+  const dimId='smvol-dims-'+vol.id;
+  if(vol.customPoly&&vol.customPoly.length>=3){
+    const dimFeatures=[];
+    for(let i=0;i<vol.customPoly.length-1;i++){
+      const a=vol.customPoly[i],b=vol.customPoly[i+1];
+      const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+      const dFt=Math.round(dM*3.28084);
+      if(dFt<3)continue;
+      dimFeatures.push({type:'Feature',geometry:{type:'Point',coordinates:[(a[0]+b[0])/2,(a[1]+b[1])/2]},properties:{label:dFt+"'"}});
+    }
+    try{if(smMap.getSource(dimId))smMap.getSource(dimId).setData({type:'FeatureCollection',features:dimFeatures});}catch(e){}
+  }
+}
+
+// Compute bounding box midpoints in GPS for the resize handles
+function smShapeBBoxHandles(vol){
+  if(!vol.customPoly||vol.customPoly.length<3)return{};
+  const [cLng,cLat]=vol.lngLat;
+  const mPerLat=111132, mPerLng=111132*Math.cos(cLat*Math.PI/180);
+  const rad=(vol.angle||0)*Math.PI/180;
+  const localPts=smShapeLocalVerts(vol.shapeType,vol.shapeParams);
+  const xs=localPts.map(p=>p[0]), ys=localPts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  // Edge midpoints in local coords, then rotate+offset to GPS
+  const toGPS=([lx,ly])=>{
+    const rx=lx*Math.cos(rad)-ly*Math.sin(rad);
+    const ry=lx*Math.sin(rad)+ly*Math.cos(rad);
+    return[cLng+rx/mPerLng,cLat+ry/mPerLat];
+  };
+  return{
+    e:toGPS([maxX,(minY+maxY)/2]),  // right edge midpoint
+    w:toGPS([minX,(minY+maxY)/2]),  // left edge midpoint
+    n:toGPS([(minX+maxX)/2,maxY]),  // top edge midpoint
+    s:toGPS([(minX+maxX)/2,minY]),  // bottom edge midpoint
+    width:maxX-minX,  // current width in meters
+    depth:maxY-minY   // current depth in meters
+  };
+}
+
+function smEnterShapeEdit(volId){
+  smExitShapeEdit();
+  const vol=smVolumes.find(v=>v.id===volId);
+  if(!vol||!vol.shapeType)return;
+  _smShapeEditId=volId;
+
+  const [cLng,cLat]=vol.lngLat;
+  const mPerLat=111132, mPerLng=111132*Math.cos(cLat*Math.PI/180);
+
+  // ── Rotation handle ──
+  const rotDist=20;
+  const rad=(vol.angle||0)*Math.PI/180;
+  const rotLng=cLng+rotDist*Math.sin(rad)/mPerLng;
+  const rotLat=cLat+rotDist*Math.cos(rad)/mPerLat;
+
+  // Connecting line
+  const lineId='sm-shape-rot-line';
+  const lineData={type:'Feature',geometry:{type:'LineString',coordinates:[[cLng,cLat],[rotLng,rotLat]]}};
+  if(smMap.getSource(lineId)){
+    smMap.getSource(lineId).setData(lineData);
+  } else {
+    smMap.addSource(lineId,{type:'geojson',data:lineData});
+    smMap.addLayer({id:lineId,type:'line',source:lineId,paint:{'line-color':'#AEBC46','line-width':2,'line-dasharray':[4,3]}});
+  }
+  _smShapeRotLine=lineId;
+
+  // Rotation marker
+  const rotEl=document.createElement('div');
+  rotEl.style.cssText='width:24px;height:24px;background:#AEBC46;border:2px solid #fff;border-radius:50%;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center';
+  rotEl.innerHTML='<svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1a5 5 0 0 1 4.5 2.8" fill="none" stroke="#111" stroke-width="1.5" stroke-linecap="round"/><path d="M10 1l1 3-3-.5" fill="#111"/></svg>';
+  rotEl.title='Drag to rotate';
+  const rotMarker=new mapboxgl.Marker({element:rotEl,draggable:true,anchor:'center'})
+    .setLngLat([rotLng,rotLat]).addTo(smMap);
+
+  rotMarker.on('drag',()=>{
+    const ll=rotMarker.getLngLat();
+    const dx=(ll.lng-cLng)*mPerLng, dy=(ll.lat-cLat)*mPerLat;
+    let a=Math.atan2(dx,dy)*180/Math.PI;
+    if(a<0)a+=360;
+    vol.angle=Math.round(a);
+    smRegenerateShapePoly(vol);
+    smConformEdges(vol);
+    smUpdateShapeGeo(vol); // lightweight — no flicker
+    try{smMap.getSource(lineId).setData({type:'Feature',geometry:{type:'LineString',coordinates:[[cLng,cLat],[ll.lng,ll.lat]]}});}catch(e){}
+    // Reposition resize handles
+    smRepositionResizeHandles(vol);
+  });
+  rotMarker.on('dragend',()=>{
+    smRenderVolPanel();
+    smAutoSync();
+  });
+  _smShapeHandles.push(rotMarker);
+
+  // ── 4 Edge resize handles (E, W, N, S) ──
+  const bbox=smShapeBBoxHandles(vol);
+  const dirs=[
+    {key:'e',gps:bbox.e,cursor:'ew-resize',dim:'width',label:'→'},
+    {key:'w',gps:bbox.w,cursor:'ew-resize',dim:'width',label:'←'},
+    {key:'n',gps:bbox.n,cursor:'ns-resize',dim:'depth',label:'↑'},
+    {key:'s',gps:bbox.s,cursor:'ns-resize',dim:'depth',label:'↓'}
+  ];
+
+  dirs.forEach(d=>{
+    if(!d.gps)return;
+    const el=document.createElement('div');
+    el.style.cssText='width:16px;height:16px;background:#fff;border:2px solid '+vol.color+';border-radius:3px;cursor:'+d.cursor+';box-shadow:0 1px 4px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;font-size:9px;color:#333;font-weight:700';
+    el.textContent=d.label;
+    el.title='Drag to resize '+d.dim;
+    const marker=new mapboxgl.Marker({element:el,draggable:true,anchor:'center'})
+      .setLngLat(d.gps).addTo(smMap);
+    marker._shapeDir=d.key; // tag for repositioning
+    const startGPS=[...d.gps];
+
+    marker.on('drag',()=>{
+      const ll=marker.getLngLat();
+      // Convert drag delta to local meters (un-rotate)
+      const dx=(ll.lng-cLng)*mPerLng, dy=(ll.lat-cLat)*mPerLat;
+      const negRad=-rad;
+      const lx=dx*Math.cos(negRad)-dy*Math.sin(negRad);
+      const ly=dx*Math.sin(negRad)+dy*Math.cos(negRad);
+      // Compute new dimension directly from handle position
+      // E/W handles control width, N/S handles control depth
+      const isWidth=(d.key==='e'||d.key==='w');
+      const newDim=isWidth?Math.abs(lx)*2:Math.abs(ly)*2; // *2 because handle is at edge, shape centered
+      smApplyDimChange(vol,isWidth?'width':'depth',Math.max(4,Math.round(newDim)));
+      smRegenerateShapePoly(vol);
+      smConformEdges(vol);
+      smUpdateShapeGeo(vol);
+      // Reposition OTHER handles (not this one being dragged)
+      smRepositionResizeHandles(vol, d.key);
+    });
+    marker.on('dragend',()=>{
+      smRegenerateShapePoly(vol);
+      smConformEdges(vol);
+      smUpdateShapeGeo(vol);
+      smRenderVolPanel();
+      smAutoSync();
+      // Reposition all handles to final positions
+      smRepositionResizeHandles(vol);
+    });
+    _smShapeHandles.push(marker);
+  });
+}
+
+// Reposition all shape edit handles to match current shape
+function smRepositionResizeHandles(vol, skipKey){
+  const bbox=smShapeBBoxHandles(vol);
+  const map={e:bbox.e,w:bbox.w,n:bbox.n,s:bbox.s};
+  const [cLng,cLat]=vol.lngLat;
+  const mPerLat=111132, mPerLng=111132*Math.cos(cLat*Math.PI/180);
+  const rad=(vol.angle||0)*Math.PI/180;
+  const rotDist=20;
+  const rotLng=cLng+rotDist*Math.sin(rad)/mPerLng;
+  const rotLat=cLat+rotDist*Math.cos(rad)/mPerLat;
+
+  _smShapeHandles.forEach(m=>{
+    // Resize handles (tagged with _shapeDir)
+    if(m._shapeDir&&m._shapeDir!==skipKey&&map[m._shapeDir]){
+      m.setLngLat(map[m._shapeDir]);
+    }
+    // Rotation handle (no _shapeDir tag, but is the first handle)
+    if(!m._shapeDir&&m!==_smShapeHandles[0])return; // skip unknown
+    if(!m._shapeDir){
+      m.setLngLat([rotLng,rotLat]);
+    }
+  });
+  // Update rotation line
+  if(_smShapeRotLine){
+    try{smMap.getSource(_smShapeRotLine).setData({type:'Feature',geometry:{type:'LineString',coordinates:[[cLng,cLat],[rotLng,rotLat]]}});}catch(e){}
+  }
+}
+
+// Apply a dimension change to the right shape param
+function smApplyDimChange(vol,axis,newMeters){
+  const p=vol.shapeParams, t=vol.shapeType;
+  const cl=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  if(axis==='width'){
+    if(t==='rect') p.w=cl(newMeters,4,200);
+    else if(t==='square') p.s=cl(newMeters,4,200);
+    else if(t==='lshape'){p.w=cl(newMeters,6,200);p.ww=Math.min(p.ww,p.w-2);}
+    else if(t==='ushape'){p.w=cl(newMeters,8,200);p.cw=Math.min(p.cw,p.w-4);}
+    else if(t==='tshape'){p.tw=cl(newMeters,6,200);p.sw=Math.min(p.sw,p.tw-2);}
+  } else {
+    if(t==='rect') p.d=cl(newMeters,4,200);
+    else if(t==='square') p.s=cl(newMeters,4,200);
+    else if(t==='lshape') p.d=cl(newMeters,6,200);
+    else if(t==='ushape') p.d=cl(newMeters,8,200);
+    else if(t==='tshape'){const total=p.sd+p.td;p.sd=cl(Math.round(newMeters*p.sd/Math.max(1,total)),4,200);p.td=cl(Math.round(newMeters*p.td/Math.max(1,total)),3,80);}
+  }
+}
+
+function smExitShapeEdit(){
+  _smShapeHandles.forEach(m=>{try{m.remove();}catch(e){}});
+  _smShapeHandles=[];
+  if(_smShapeRotLine){
+    try{if(smMap.getLayer(_smShapeRotLine))smMap.removeLayer(_smShapeRotLine);}catch(e){}
+    try{if(smMap.getSource(_smShapeRotLine))smMap.removeSource(_smShapeRotLine);}catch(e){}
+    _smShapeRotLine=null;
+  }
+  _smShapeEditId=null;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  POLYGON RESIZE — Corner-drag resize for customPoly volumes
+//  Used primarily for AI-generated tower volumes. Drags one of 4 corner
+//  handles to scale the polygon. Opposite corner stays anchored (window-resize
+//  pattern). Polygon shape (L/T/U/freeform) is preserved — only scaled.
+//  For tower volumes, optionally constrains to stay inside podium footprint.
+// ═══════════════════════════════════════════════════════════
+
+/** Compute current bounding box of the polygon in GPS coords */
+function smPolyBBox(coords){
+  if(!coords || coords.length < 3) return null;
+  var lngs = coords.map(c => c[0]);
+  var lats = coords.map(c => c[1]);
+  return {
+    minLng: Math.min.apply(null, lngs), maxLng: Math.max.apply(null, lngs),
+    minLat: Math.min.apply(null, lats), maxLat: Math.max.apply(null, lats),
+  };
+}
+
+/** Compute the 4 corner handle positions (NW, NE, SW, SE) for a polygon's bbox */
+function smPolyCornerHandles(coords){
+  var b = smPolyBBox(coords);
+  if(!b) return null;
+  return {
+    nw: [b.minLng, b.maxLat],
+    ne: [b.maxLng, b.maxLat],
+    sw: [b.minLng, b.minLat],
+    se: [b.maxLng, b.minLat],
+    bbox: b
+  };
+}
+
+/** Scale a polygon coordinates set by sx,sy around an anchor [aLng,aLat]
+ *  Each vertex's distance from anchor is multiplied by the scale factors. */
+function smScalePolygon(coords, aLng, aLat, sx, sy){
+  return coords.map(function(p){
+    return [aLng + (p[0] - aLng) * sx, aLat + (p[1] - aLat) * sy];
+  });
+}
+
+/** Update the volume's customPoly (and lngLat) in place after a scale operation */
+function smApplyScaledPoly(vol, newCoords){
+  // Recompute closed ring (first === last) and centroid for marker position
+  var ring = newCoords.slice();
+  if(ring.length > 0){
+    var first = ring[0], last = ring[ring.length-1];
+    if(first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
+  }
+  vol.customPoly = ring;
+  // Recentre the marker on the new polygon centroid
+  var sumLng = 0, sumLat = 0, n = ring.length - 1;
+  for(var i = 0; i < n; i++){ sumLng += ring[i][0]; sumLat += ring[i][1]; }
+  if(n > 0){ vol.lngLat = [sumLng / n, sumLat / n]; }
+  // Recalculate area
+  try {
+    var poly = turf.polygon([ring]);
+    vol.customAreaSF = turf.area(poly) * 10.7639;
+  } catch(e) {}
+}
+
+/** If the volume is a TOWER (above a podium), clamp its polygon inside the podium footprint */
+function smClampTowerInsidePodium(vol, candidateCoords){
+  // Only apply if there's another volume that this tower sits on (the podium)
+  // Heuristic: any volume whose customPoly contains this volume's center
+  if(!candidateCoords || candidateCoords.length < 3) return candidateCoords;
+  var podium = smVolumes.find(function(v){
+    if(v.id === vol.id) return false;
+    if(!v.customPoly || v.customPoly.length < 3) return false;
+    try {
+      var pp = turf.polygon([v.customPoly]);
+      var center = turf.point(vol.lngLat);
+      return turf.booleanPointInPolygon(center, pp);
+    } catch(e) { return false; }
+  });
+  if(!podium || !podium.customPoly) return candidateCoords;
+  // Use turf.intersect to clip the candidate to the podium polygon
+  try {
+    var candidatePoly = turf.polygon([candidateCoords]);
+    var podiumPoly = turf.polygon([podium.customPoly]);
+    var clipped = turf.intersect(candidatePoly, podiumPoly);
+    if(clipped && clipped.geometry && clipped.geometry.coordinates && clipped.geometry.coordinates[0]){
+      return clipped.geometry.coordinates[0];
+    }
+  } catch(e) { /* fall through */ }
+  return candidateCoords;
+}
+
+/** Enter polygon resize mode — adds 4 corner handles that scale the polygon */
+function smEnterPolyResize(volId){
+  smExitShapeEdit();
+  var vol = smVolumes.find(function(v){ return v.id === volId; });
+  if(!vol || !vol.customPoly || vol.customPoly.length < 3){
+    smShowToast('Resize requires a polygon volume','#e8c87a');
+    return;
+  }
+  _smShapeEditId = volId;
+
+  function buildHandles(){
+    // Wipe existing handles before rebuilding
+    _smShapeHandles.forEach(function(m){ try { m.remove(); } catch(e) {} });
+    _smShapeHandles = [];
+
+    var corners = smPolyCornerHandles(vol.customPoly);
+    if(!corners) return;
+    var dirs = [
+      {key: 'nw', gps: corners.nw, anchor: corners.se, cursor: 'nwse-resize'},
+      {key: 'ne', gps: corners.ne, anchor: corners.sw, cursor: 'nesw-resize'},
+      {key: 'sw', gps: corners.sw, anchor: corners.ne, cursor: 'nesw-resize'},
+      {key: 'se', gps: corners.se, anchor: corners.nw, cursor: 'nwse-resize'},
+    ];
+    dirs.forEach(function(d){
+      var el = document.createElement('div');
+      el.style.cssText = 'width:18px;height:18px;background:#fff;border:2px solid ' + (vol.color || '#AEBC46') +
+        ';border-radius:3px;cursor:' + d.cursor + ';box-shadow:0 1px 4px rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;font-size:10px;color:#333;font-weight:700';
+      el.textContent = '⤡';
+      el.title = 'Drag to resize (opposite corner anchored)';
+      var marker = new mapboxgl.Marker({element: el, draggable: true, anchor: 'center'})
+        .setLngLat(d.gps).addTo(smMap);
+
+      // Capture the original bbox so scaling is proportional from anchor
+      var startBBox = smPolyBBox(vol.customPoly);
+      var startCoords = vol.customPoly.map(function(p){ return [p[0], p[1]]; });
+      var anchor = d.anchor;
+      var startDragLng = d.gps[0], startDragLat = d.gps[1];
+
+      marker.on('dragstart', function(){
+        // Re-snapshot in case other operations happened
+        startCoords = vol.customPoly.map(function(p){ return [p[0], p[1]]; });
+        startBBox = smPolyBBox(startCoords);
+        var c = smPolyCornerHandles(startCoords);
+        anchor = c[d.key === 'nw' ? 'se' : d.key === 'ne' ? 'sw' : d.key === 'sw' ? 'ne' : 'nw'];
+      });
+
+      marker.on('drag', function(){
+        var ll = marker.getLngLat();
+        // Compute scale factors based on new corner distance from anchor vs original
+        var origDx = startDragLng - anchor[0];
+        var origDy = startDragLat - anchor[1];
+        var newDx  = ll.lng - anchor[0];
+        var newDy  = ll.lat - anchor[1];
+        // Avoid division by zero / sign flip
+        var sx = Math.abs(origDx) > 1e-8 ? (newDx / origDx) : 1;
+        var sy = Math.abs(origDy) > 1e-8 ? (newDy / origDy) : 1;
+        // Clamp to reasonable bounds — prevent tiny or inverted polygons
+        sx = Math.max(0.1, Math.min(5.0, sx));
+        sy = Math.max(0.1, Math.min(5.0, sy));
+        var scaled = smScalePolygon(startCoords, anchor[0], anchor[1], sx, sy);
+        // Clamp tower inside podium if applicable
+        var finalCoords = smClampTowerInsidePodium(vol, scaled);
+        smApplyScaledPoly(vol, finalCoords);
+        // Live update map
+        smDrawVolume(vol);
+        // Reposition handles in real time
+        buildHandles();
+      });
+
+      marker.on('dragend', function(){
+        smConformEdges(vol);
+        smUpdateShapeGeo(vol);
+        smRenderVolPanel();
+        smAutoSync();
+        buildHandles();
+      });
+
+      _smShapeHandles.push(marker);
+    });
+  }
+  buildHandles();
+  smShowToast('Drag the corner handles to resize • Click another building to exit','#AEBC46');
+}
+
+// ── Update shape param from panel input ──
+function smUpdateShapeParam(volId,key,val){
+  const vol=smVolumes.find(v=>v.id===volId);
+  if(!vol||!vol.shapeParams)return;
+  vol.shapeParams[key]=parseFloat(val)||0;
+  // Clamp wing/court dimensions
+  const p=vol.shapeParams, t=vol.shapeType;
+  if(t==='lshape'){p.ww=Math.min(p.ww,p.w-2);p.wd=Math.min(p.wd,p.d-2);}
+  if(t==='ushape'){p.cw=Math.min(p.cw,p.w-4);p.cd=Math.min(p.cd,p.d-4);}
+  if(t==='tshape'){p.sw=Math.min(p.sw,p.tw-2);}
+  smRegenerateShapePoly(vol);
+  smConformEdges(vol);
+  smUpdateShapeGeo(vol);
+  smDrawVolume(vol);
+  smAutoSync();
+  if(_smShapeEditId===volId) smEnterShapeEdit(volId);
+}
+
+// ── Readable shape name ──
+function smShapeLabel(type){
+  return {rect:'Rectangle',square:'Square',lshape:'L-Shape',ushape:'U-Shape',tshape:'T-Shape'}[type]||'Shape';
+}
+
+// ── Generate dimension inputs for shape param editing ──
+function smShapeDimInputs(vol){
+  const p=vol.shapeParams, t=vol.shapeType, id=vol.id;
+  const si=`background:#1A1A1A;border:1px solid #333333;color:#AEBC46;padding:3px 6px;border-radius:3px;font-size:11px;width:100%`;
+  const sinp=(key,val,label)=>`<label style="color:#777">${label}</label><input type="number" value="${Math.round(val)}" min="2" max="200" style="${si}" onchange="smUpdateShapeParam(${id},'${key}',this.value)">`;
+  let html='';
+  if(t==='rect'){
+    html+=sinp('w',p.w,'Width (m)');
+    html+=sinp('d',p.d,'Depth (m)');
+  } else if(t==='square'){
+    html+=sinp('s',p.s,'Side (m)');
+  } else if(t==='lshape'){
+    html+=sinp('w',p.w,'Total Width (m)');
+    html+=sinp('d',p.d,'Total Depth (m)');
+    html+=sinp('ww',p.ww,'Arm Width (m)');
+    html+=sinp('wd',p.wd,'Base Depth (m)');
+  } else if(t==='ushape'){
+    html+=sinp('w',p.w,'Total Width (m)');
+    html+=sinp('d',p.d,'Total Depth (m)');
+    html+=sinp('cw',p.cw,'Court Width (m)');
+    html+=sinp('cd',p.cd,'Court Depth (m)');
+  } else if(t==='tshape'){
+    html+=sinp('tw',p.tw,'Bar Width (m)');
+    html+=sinp('td',p.td,'Bar Depth (m)');
+    html+=sinp('sw',p.sw,'Stem Width (m)');
+    html+=sinp('sd',p.sd,'Stem Depth (m)');
+  }
+  html+=`<label style="color:#777">Footprint</label><span style="color:#AEBC46;font-size:11px;font-weight:600;padding:3px 0">${(vol.customAreaSF||0).toLocaleString()} sf</span>`;
+  return html;
+}
+
+// ── Convert parametric shape to freeform polygon (loses shape params, gains full vertex control) ──
+function smConvertToFreeform(volId){
+  const vol=smVolumes.find(v=>v.id===volId);
+  if(!vol||!vol.shapeType)return;
+  smExitShapeEdit();
+  vol.shapeType=null;
+  vol.shapeParams=null;
+  smUpdateShapeGeo(vol);
+  smRenderVolPanel();
+  smAutoSync();
+  smShowToast('Converted to freeform — use EDIT SHAPE for vertex control','#4ecdc4');
+}
+
+function smDrawVolume(vol){
+  const sourceId='smvol-'+vol.id;
+  const fillId='smvol-fill-'+vol.id;
+  const lineId='smvol-line-'+vol.id;
+  const dimId='smvol-dims-'+vol.id;
+  const labelId='smvol-label-'+vol.id;
+
+  // Build polygon data
+  const poly=vol.customPoly
+    ?{type:'Feature',geometry:{type:'Polygon',coordinates:[vol.customPoly]},properties:{id:vol.id}}
+    :smVolToGeoJSON(vol);
+
+  // Update or create polygon layers (no remove/re-add)
+  if(smMap.getSource(sourceId)){
+    smMap.getSource(sourceId).setData(poly);
+  } else {
+    smMap.addSource(sourceId,{type:'geojson',data:poly});
+    smMap.addLayer({id:fillId,type:'fill',source:sourceId,paint:{'fill-color':vol.color,'fill-opacity':0.4}});
+    smMap.addLayer({id:lineId,type:'line',source:sourceId,paint:{'line-color':vol.color,'line-width':3}});
+  }
+
+  // Dimension labels on edges
+  if(vol.customPoly&&vol.customPoly.length>=3){
+    const dimFeatures=[];
+    for(let i=0;i<vol.customPoly.length-1;i++){
+      const a=vol.customPoly[i],b=vol.customPoly[i+1];
+      const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+      const dFt=Math.round(dM*3.28084);
+      if(dFt<3)continue;
+      dimFeatures.push({type:'Feature',geometry:{type:'Point',coordinates:[(a[0]+b[0])/2,(a[1]+b[1])/2]},properties:{label:dFt+"'"}});
+    }
+    const dimData={type:'FeatureCollection',features:dimFeatures};
+    if(smMap.getSource(dimId)){smMap.getSource(dimId).setData(dimData);}
+    else{
+      smMap.addSource(dimId,{type:'geojson',data:dimData});
+      smMap.addLayer({id:dimId,type:'symbol',source:dimId,layout:{'text-field':['get','label'],'text-size':10,'text-font':['Open Sans Bold'],'text-allow-overlap':true,'text-offset':[0,-0.8]},paint:{'text-color':'#fff','text-halo-color':vol.color,'text-halo-width':1.5}});
+    }
+  }
+
+  // Center marker — reuse if exists, only recreate if needed
+  const isSel=smSelectedVolId===vol.id;
+  if(vol.marker){
+    // Just reposition and restyle — don't destroy/recreate
+    vol.marker.setLngLat(vol.lngLat);
+    const mEl=vol.marker.getElement();
+    if(mEl){
+      mEl.style.width=(isSel?30:24)+'px';
+      mEl.style.height=(isSel?30:24)+'px';
+      mEl.style.border=isSel?'3px solid #AEBC46':'2px solid #fff';
+      mEl.style.fontSize=(isSel?12:10)+'px';
+    }
+  } else {
+    const el=document.createElement('div');
+    el.style.cssText=`width:${isSel?30:24}px;height:${isSel?30:24}px;background:${vol.color};border:${isSel?'3px solid #AEBC46':'2px solid #fff'};border-radius:50%;cursor:grab;display:flex;align-items:center;justify-content:center;font-size:${isSel?12:10}px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.5)`;
+    el.textContent=vol.name;
+    el.title='Drag to move · Click to select · Shift+Arrow to rotate';
+    el.addEventListener('click',(e)=>{
+      e.stopPropagation();
+      smSelectedVolId=vol.id;
+      smVolumes.forEach(v=>smDrawVolume(v));
+      smRenderVolPanel();
+    });
+    vol.marker=new mapboxgl.Marker({element:el,draggable:true,anchor:'center'})
+      .setLngLat(vol.lngLat).addTo(smMap);
+    // ── Drag: real-time polygon follow + edge conforming ──
+    vol.marker.on('dragstart',()=>{
+      vol._prevLngLat=[...vol.lngLat];
+      vol._dragRaf=null;
+    });
+    vol.marker.on('drag',()=>{
+      if(vol._dragRaf)return; // throttle to 1 update per animation frame
+      vol._dragRaf=requestAnimationFrame(()=>{
+        vol._dragRaf=null;
+        const ll=vol.marker.getLngLat();
+        vol.lngLat=[ll.lng,ll.lat];
+        if(vol.shapeType) smRegenerateShapePoly(vol, true); // skipArea during drag
+        else if(vol.customPoly) smTranslateCustomPoly(vol,[ll.lng,ll.lat]);
+        smConformEdges(vol); // reshape edges to match nearby lot/building edges
+        smUpdateShapeGeo(vol, true); // skipDims during drag
+        // Update label
+        const lid='smvol-label-'+vol.id;
+        try{if(smMap.getSource(lid))smMap.getSource(lid).setData({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:vol.lngLat},properties:{label:vol.name+' ('+vol.storeys+'F)'}}]});}catch(e){}
+        if(_smShapeEditId===vol.id) smRepositionResizeHandles(vol);
+      });
+    });
+    vol.marker.on('dragend',()=>{
+      if(vol._dragRaf){cancelAnimationFrame(vol._dragRaf);vol._dragRaf=null;}
+      const ll=vol.marker.getLngLat();
+      vol.lngLat=[ll.lng,ll.lat];
+      if(vol.shapeType) smRegenerateShapePoly(vol);
+      else if(vol.customPoly) smTranslateCustomPoly(vol,[ll.lng,ll.lat]);
+      smConformEdges(vol); // reshape edges to match nearby lot/building edges
+      smUpdateShapeGeo(vol);
+      smAutoSync();
+      delete vol._prevLngLat;
+      if(_smShapeEditId===vol.id) smEnterShapeEdit(vol.id);
+    });
+  }
+
+  // Label on polygon — update or create
+  const labelData={type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:vol.lngLat},properties:{label:vol.name+' ('+vol.storeys+'F)'}}]};
+  if(smMap.getSource(labelId)){
+    smMap.getSource(labelId).setData(labelData);
+  } else {
+    smMap.addSource(labelId,{type:'geojson',data:labelData});
+    smMap.addLayer({id:labelId,type:'symbol',source:labelId,layout:{'text-field':['get','label'],'text-size':11,'text-font':['Open Sans Bold'],'text-allow-overlap':true},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,0.8)','text-halo-width':1.5}});
+  }
+}
+
+function smVolToGeoJSON(vol){
+  const [lng,lat]=vol.lngLat;
+  const halfW=vol.widthFt*0.3048/2;
+  const halfD=vol.depthFt*0.3048/2;
+  const angleRad=vol.angle*Math.PI/180;
+
+  // Corner offsets in meters (before rotation)
+  const corners=[[-halfW,-halfD],[halfW,-halfD],[halfW,halfD],[-halfW,halfD]];
+
+  // Rotate and convert to lng/lat
+  const mPerDegLat=111132;
+  const mPerDegLng=111132*Math.cos(lat*Math.PI/180);
+
+  const pts=corners.map(([dx,dz])=>{
+    const rx=dx*Math.cos(angleRad)-dz*Math.sin(angleRad);
+    const rz=dx*Math.sin(angleRad)+dz*Math.cos(angleRad);
+    return [lng+rx/mPerDegLng, lat+rz/mPerDegLat];
+  });
+  pts.push(pts[0]); // close
+
+  return {type:'Feature',geometry:{type:'Polygon',coordinates:[pts]},properties:{id:vol.id}};
+}
+
+function smRemoveVolGeo(vol){
+  const sourceId='smvol-'+vol.id;
+  const fillId='smvol-fill-'+vol.id;
+  const lineId='smvol-line-'+vol.id;
+  const labelId='smvol-label-'+vol.id;
+  const dimId='smvol-dims-'+vol.id;
+  [fillId,lineId,labelId,dimId].forEach(id=>{try{if(smMap.getLayer(id))smMap.removeLayer(id);}catch(e){}});
+  [sourceId,labelId,dimId].forEach(id=>{try{if(smMap.getSource(id))smMap.removeSource(id);}catch(e){}});
+  if(vol.marker){vol.marker.remove();vol.marker=null;}
+}
+
+function smDeleteVolume(id){
+  if(_smShapeEditId===id) smExitShapeEdit();
+  const idx=smVolumes.findIndex(v=>v.id===id);
+  if(idx<0)return;
+  const vol=smVolumes[idx];
+  // Clean up map layers, source, and marker
+  smRemoveVolGeo(vol);
+  smVolumes.splice(idx,1);
+  if(smSelectedVolId===id) smSelectedVolId=smVolumes.length>0?smVolumes[0].id:null;
+  // Defer panel rebuild to avoid DOM conflicts with click event chain
+  setTimeout(()=>{
+    smRenderVolPanel();
+    smAutoSync();
+  },0);
+}
+
+function smRenderVolPanel(){
+  const list=document.getElementById('sitemap-vol-list');
+  if(!list)return;
+  list.innerHTML='';
+
+  smVolumes.forEach(vol=>{
+    const isSel=smSelectedVolId===vol.id;
+    const card=document.createElement('div');
+    card.style.cssText=`background:${isSel?'#1a1a3a':'#1A1A1A'};border:1px solid ${isSel?vol.color:vol.color+'44'};border-left:3px solid ${vol.color};border-radius:4px;padding:8px;margin-bottom:6px;cursor:pointer;transition:all 0.15s`;
+    card.onclick=(e)=>{if(e.target.closest('button')||e.target.tagName==='INPUT')return;smSelectedVolId=vol.id;smVolumes.forEach(v=>smDrawVolume(v));smRenderVolPanel();};
+
+    const fp=vol.customPoly?vol.customAreaSF:(vol.widthFt*vol.depthFt);
+    const rawGFA=fp*vol.storeys;
+    // Compute overlap using actual polygon geometry
+    let overlapSF=0;
+    smVolumes.forEach(other=>{
+      if(other.id===vol.id)return;
+      try{
+        const polyA=vol.customPoly
+          ?turf.polygon([vol.customPoly])
+          :smVolToGeoJSON(vol);
+        const polyB=other.customPoly
+          ?turf.polygon([other.customPoly])
+          :smVolToGeoJSON(other);
+        const inter=turf.intersect(turf.featureCollection([polyA,polyB]));
+        if(inter){
+          const areaSqFt=turf.area(inter)*10.7639;
+          const commonSt=Math.min(vol.storeys,other.storeys);
+          overlapSF+=areaSqFt*commonSt;
+        }
+      }catch(e){}
+    });
+    const netGFA=rawGFA-overlapSF;
+
+    const inp=(key,val,min,max,isCheck)=>{
+      if(isCheck) return `<input type="checkbox" ${val?'checked':''} style="accent-color:#AEBC46;width:16px;height:16px" onchange="smUpdateVol(${vol.id},'${key}',this.checked?1:0)">`;
+      return `<input type="number" value="${val}" min="${min}" max="${max}" style="background:#1A1A1A;border:1px solid #333333;color:#AEBC46;padding:3px 6px;border-radius:3px;font-size:11px;width:100%" onchange="smUpdateVol(${vol.id},'${key}',this.value)">`;
+    };
+
+    // Compute lot area for coverage %
+    let lotAreaSF=0;
+    if(smLotData){try{lotAreaSF=turf.area(smLotData.geometry)*10.7639;}catch(e){}}
+    const coveragePct=lotAreaSF>0?((fp/lotAreaSF)*100).toFixed(1):0;
+    card.innerHTML=`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="color:${vol.color};font-weight:700;font-size:12px">${isSel?'▸ ':''}VOL ${vol.name}</span>
+        <div style="display:flex;gap:4px;align-items:center">
+          ${isSel?'<span style="font-size:9px;color:#AEBC46;background:#AEBC4622;padding:1px 6px;border-radius:3px">SELECTED</span>':''}
+          <button onclick="event.stopPropagation();smDeleteVolume(${vol.id})" style="background:#c44;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:10px">X</button>
+        </div>
+      </div>
+
+      <div style="font-size:9px;color:#777;letter-spacing:1px;margin:4px 0 2px;font-weight:600">DIMENSIONS ${vol.shapeType?'<span style="color:#AEBC46;font-weight:400">('+smShapeLabel(vol.shapeType)+')</span>':vol.customPoly?'<span style="color:#AEBC46;font-weight:400">(freeform polygon)</span>':''}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">
+        ${vol.shapeType?smShapeDimInputs(vol)
+          :vol.customPoly
+          ?`<label style="color:#777">Footprint</label><span style="color:#AEBC46;font-size:11px;font-weight:600;padding:3px 0">${vol.customAreaSF.toLocaleString()} sf</span>
+             <label style="color:#777">Vertices</label><span style="color:#888;font-size:11px;padding:3px 0">${vol.customPoly.length-1} pts</span>`
+          :`<label style="color:#777">Width (ft)</label>${inp('widthFt',vol.widthFt,10,300)}
+             <label style="color:#777">Depth (ft)</label>${inp('depthFt',vol.depthFt,10,300)}
+             <label style="color:#777">Angle (°)</label>${inp('angle',vol.angle,0,360)}`}
+        <label style="color:#777">Storeys</label>${inp('storeys',vol.storeys,1,40)}
+        <label style="color:#777">Comm. GF</label>${inp('commGF',vol.commGF,0,0,true)}
+        ${vol.shapeType?`<label style="color:#777">Angle (°)</label>${inp('angle',vol.angle,0,360)}`:''}
+      </div>
+
+      <div style="font-size:9px;color:#777;letter-spacing:1px;margin:6px 0 2px;font-weight:600">FACADE</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">
+        <label style="color:#777">Windows</label>${inp('windows',vol.windows,0,0,true)}
+        <label style="color:#777">Win Spacing (ft)</label>${inp('winSpacing',vol.winSpacing,1,10)}
+      </div>
+
+      <div style="font-size:9px;color:#777;letter-spacing:1px;margin:6px 0 2px;font-weight:600">BALCONIES</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">
+        <label style="color:#777">Every N floors</label>${inp('balcEvery',vol.balcEvery,1,10)}
+        <label style="color:#777">Depth (ft)</label>${inp('balcDepth',vol.balcDepth,1,8)}
+        <label style="color:#777">Front</label>${inp('balcFront',vol.balcFront,0,0,true)}
+        <label style="color:#777">Back</label>${inp('balcBack',vol.balcBack,0,0,true)}
+        <label style="color:#777">Left</label>${inp('balcLeft',vol.balcLeft,0,0,true)}
+        <label style="color:#777">Right</label>${inp('balcRight',vol.balcRight,0,0,true)}
+      </div>
+
+      <div style="margin-top:6px;padding-top:4px;border-top:1px solid #333333;font-size:10px;color:#777">
+          Floor plate: <b style="color:#AEBC46">${fp.toLocaleString()} sf</b> ·
+          Gross GFA: <b style="color:#AEBC46">${rawGFA.toLocaleString()} sf</b>
+          ${overlapSF>10?`<br><span style="color:#ff6644">⚠ Overlap: ${Math.round(overlapSF).toLocaleString()} sf deducted</span><br>Net GFA: <b style="color:#AEBC46">${Math.round(netGFA).toLocaleString()} sf</b>`:'<br><span style="color:#4a8">✓ No overlap</span>'}
+      </div>
+      ${vol.shapeType?`<div style="margin-top:4px;display:flex;gap:4px">
+        <button onclick="event.stopPropagation();smEnterShapeEdit(${vol.id})" style="flex:1;background:#444444;color:#AEBC46;border:1px solid #AEBC4644;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:10px;font-weight:600">${_smShapeEditId===vol.id?'✓ EDITING':'🔧 EDIT HANDLES'}</button>
+        <button onclick="event.stopPropagation();smConvertToFreeform(${vol.id})" style="flex:1;background:#444444;color:#888;border:1px solid #333333;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:10px">✏️ TO FREEFORM</button>
+      </div>`
+      :vol.customPoly?`<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="event.stopPropagation();smEnterPolyResize(${vol.id})" style="flex:1;min-width:60px;background:${_smShapeEditId===vol.id?'#AEBC46':'#444444'};color:${_smShapeEditId===vol.id?'#111':'#AEBC46'};border:1px solid #AEBC4644;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:10px;font-weight:700">${_smShapeEditId===vol.id?'✓ RESIZING':'⬄ RESIZE'}</button>
+        <button onclick="event.stopPropagation();smEditBldgPoly(${vol.id})" style="flex:1;min-width:60px;background:#444444;color:#AEBC46;border:1px solid #AEBC4644;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:10px;font-weight:600">✏️ EDIT VERTICES</button>
+        <button onclick="event.stopPropagation();smResetToRect(${vol.id})" style="flex:1;min-width:60px;background:#444444;color:#888;border:1px solid #333333;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:10px">⬜ TO RECT</button>
+      </div>`:''}
+      ${isSel?`<div style="margin-top:4px;font-size:9px;color:#777;text-align:center">${vol.shapeType?'Shift + ← → to rotate · Drag handles to resize':'Click RESIZE to drag corners · Shift + ← → to rotate'} · Drag marker to move</div>`:''}`;
+    list.appendChild(card);
+  });
+  // Update phase button visibility
+  if(typeof smUpdatePhaseButton==='function') smUpdatePhaseButton();
+}
+
+function smUpdateVol(id,key,val){
+  const vol=smVolumes.find(v=>v.id===id);
+  if(!vol)return;
+  vol[key]=typeof val==='string'?parseFloat(val):val;
+  // Regenerate shape polygon if angle changed on a shape-builder volume
+  if(vol.shapeType&&(key==='angle')){
+    smRegenerateShapePoly(vol);
+    smConformEdges(vol);
+    if(_smShapeEditId===id) smEnterShapeEdit(id);
+  }
+  smDrawVolume(vol);
+  smRenderVolPanel();
+  smAutoSync();
+}
+
+// Compute overlap-adjusted GFA across all map volumes
+function smComputeTotals(){
+  let rawGFA=0, commGFA=0, totalOverlap=0;
+  smVolumes.forEach((vol,i)=>{
+    const fp=vol.customPoly?vol.customAreaSF:(vol.widthFt*vol.depthFt);
+    rawGFA+=fp*vol.storeys;
+    if(vol.commGF) commGFA+=fp;
+    // Overlap with volumes already counted
+    for(let j=0;j<i;j++){
+      try{
+        const polyA=vol.customPoly?turf.polygon([vol.customPoly]):smVolToGeoJSON(vol);
+        const polyB=smVolumes[j].customPoly?turf.polygon([smVolumes[j].customPoly]):smVolToGeoJSON(smVolumes[j]);
+        const inter=turf.intersect(turf.featureCollection([polyA,polyB]));
+        if(inter){
+          const areaSqFt=turf.area(inter)*10.7639;
+          const commonSt=Math.min(vol.storeys,smVolumes[j].storeys);
+          totalOverlap+=areaSqFt*commonSt;
+        }
+      }catch(e){}
+    }
+  });
+  const netGFA=rawGFA-totalOverlap;
+  const resiGFA=netGFA-commGFA;
+  const lotA=smLotData?Math.round(smLotData.areaSqFt):1;
+  return {rawGFA,netGFA,commGFA,resiGFA,totalOverlap,fsi:netGFA/lotA,units:Math.round(Math.max(0,resiGFA)*0.82/650),lotA};
+}
+
+function smUpdateVolStats(){
+  const el=document.getElementById('sitemap-vol-stats');
+  if(!el)return;
+  if(smVolumes.length===0){el.innerHTML='';return;}
+  const t=smComputeTotals();
+
+  el.innerHTML=`
+  <div style="background:#1A1A1A;border-radius:4px;padding:8px;border:1px solid #333333">
+    <div style="font-size:10px;font-weight:600;letter-spacing:1px;color:#AEBC46;margin-bottom:6px">PROJECT STATS (LIVE)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:11px">
+      <span style="color:#777">Gross GFA:</span><span style="color:#888">${Math.round(t.rawGFA).toLocaleString()} sf</span>
+      ${t.totalOverlap>10?`<span style="color:#ff6644">Overlap:</span><span style="color:#ff6644">-${Math.round(t.totalOverlap).toLocaleString()} sf</span>`:''}
+      <span style="color:#777">Net GFA:</span><span style="color:#AEBC46;font-weight:700">${Math.round(t.netGFA).toLocaleString()} sf</span>
+      <span style="color:#777">Commercial:</span><span style="color:#AEBC46">${Math.round(t.commGFA).toLocaleString()} sf</span>
+      <span style="color:#777">Residential:</span><span style="color:#AEBC46">${Math.round(t.resiGFA).toLocaleString()} sf</span>
+      <span style="color:#777">FSI:</span><span style="color:#AEBC46;font-weight:600">${t.fsi.toFixed(1)}x</span>
+      <span style="color:#777">Est. Units:</span><span style="color:#AEBC46">${t.units}</span>
+      <span style="color:#777">Volumes:</span><span style="color:#AEBC46">${smVolumes.length}</span>
+    </div>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ZONING AUTO-DETECT — Toronto Zoning By-law 569-2013
+// ═══════════════════════════════════════════════════════════
+const ZONING_URLS={
+  area:'https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/34927e44-fc11-4336-a8aa-a0dfb27658b7/resource/d75fa1ed-cd04-4a0b-bb6d-2b928ffffa6e/download/zoning-area-4326.geojson',
+  height:'https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/34927e44-fc11-4336-a8aa-a0dfb27658b7/resource/eec27e60-7c2d-4c46-8fa1-b64f441bcc39/download/zoning-height-overlay-4326.geojson',
+  lotCov:'https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/34927e44-fc11-4336-a8aa-a0dfb27658b7/resource/d8a64423-8754-46f3-aa28-d78d1b639ed6/download/zoning-lot-coverage-overlay-4326.geojson',
+  policy:'https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/34927e44-fc11-4336-a8aa-a0dfb27658b7/resource/a4502214-9441-4299-9f50-ecd5a5e4de35/download/zoning-policy-area-overlay-4326.geojson'
+};
+let _zoningCache={area:null,height:null,lotCov:null,policy:null};
+let _zoningLoading=false;
+let _zoningOverlayVisible=false;
+
+// Load zoning GeoJSON data (cached per session)
+async function loadZoningData(layer){
+  if(_zoningCache[layer])return _zoningCache[layer];
+  try{
+    const resp=await fetch(ZONING_URLS[layer]);
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const data=await resp.json();
+    _zoningCache[layer]=data;
+    return data;
+  }catch(e){
+    console.warn('Failed to load zoning '+layer+':',e.message);
+    return null;
+  }
+}
+
+// Toggle zoning overlay on the Mapbox map
+let _zoningPopup=null;
+function _smZoningClickHandler(e){
+  // Don't fire while drawing lot or building polygons
+  if(smLotDrawing||smBldgDrawing)return;
+  const lng=e.lngLat.lng, lat=e.lngLat.lat;
+  // Remove previous popup
+  if(_zoningPopup){_zoningPopup.remove();_zoningPopup=null;}
+  // Show loading popup
+  _zoningPopup=new mapboxgl.Popup({maxWidth:'340px',className:'zoning-popup'})
+    .setLngLat([lng,lat])
+    .setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#AEBC46;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:6px">QUERYING ZONING...</div><div style="color:#888;font-size:10px">Loading from City of Toronto ArcGIS...</div></div>')
+    .addTo(smMap);
+  // Query ArcGIS
+  detectZoning(lat,lng).then(z=>{
+    if(!_zoningPopup)return;
+    if(!z||!z.zone){
+      _zoningPopup.setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#c44;font-size:10px;font-weight:700">NO ZONING DATA</div><div style="color:#888;font-size:10px;margin-top:4px">No zoning polygon found at this location.<br>This may be outside City of Toronto jurisdiction.</div></div>');
+      return;
+    }
+    // Build the popup content
+    const zc=(z.zone||'').toUpperCase();
+    let typeLabel='Mixed-Use', typeColor='#AEBC46';
+    if(zc.startsWith('CRE')){typeLabel='Commercial · Residential · Employment';typeColor='#e8c87a';}
+    else if(zc.startsWith('CR')){typeLabel='Commercial · Residential';typeColor='#AEBC46';}
+    else if(zc.startsWith('C')){typeLabel='Commercial';typeColor='#4ecdc4';}
+    else if(zc.startsWith('RA')){typeLabel='Residential Apartment';typeColor='#ff9966';}
+    else if(zc.startsWith('RD')){typeLabel='Residential Detached';typeColor='#88cc66';}
+    else if(zc.startsWith('RS')){typeLabel='Residential Semi-Detached';typeColor='#88cc66';}
+    else if(zc.startsWith('RT')){typeLabel='Residential Townhouse';typeColor='#88cc66';}
+    else if(zc.startsWith('R')){typeLabel='Residential';typeColor='#ff9966';}
+    else if(zc.startsWith('E')){typeLabel='Employment / Industrial';typeColor='#b088cc';}
+    else if(zc.startsWith('I')){typeLabel='Institutional';typeColor='#cc8888';}
+    else if(zc.startsWith('O')){typeLabel='Open Space / Parks';typeColor='#66bb66';}
+    else if(zc.startsWith('U')){typeLabel='Utility';typeColor='#8899aa';}
+    else{typeLabel='Other';typeColor='#888';}
+
+    let html='<div style="font-family:Outfit,DM Sans,sans-serif;padding:2px;min-width:220px">';
+    // Header bar
+    html+='<div style="background:'+typeColor+';color:#111;padding:6px 10px;border-radius:4px;margin:-2px -2px 8px -2px">';
+    html+='<div style="font-size:15px;font-weight:800;letter-spacing:0.5px">'+(z.zoneString||z.zone)+'</div>';
+    html+='<div style="font-size:9px;font-weight:600;opacity:0.7;margin-top:1px">'+typeLabel+'</div>';
+    html+='</div>';
+    // Data grid
+    html+='<div style="display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:11px;color:#333">';
+    if(z.fsiLimit) html+='<span style="color:#888;font-weight:600">Max FSI</span><span style="font-weight:700">'+z.fsiLimit+'×</span>';
+    if(z.fsiResi) html+='<span style="color:#888;font-size:10px;padding-left:8px">Residential</span><span style="font-size:10px">'+z.fsiResi+'×</span>';
+    if(z.fsiComm) html+='<span style="color:#888;font-size:10px;padding-left:8px">Commercial</span><span style="font-size:10px">'+z.fsiComm+'×</span>';
+    if(z.fsiEmploy) html+='<span style="color:#888;font-size:10px;padding-left:8px">Employment</span><span style="font-size:10px">'+z.fsiEmploy+'×</span>';
+    if(!z.fsiLimit) html+='<span style="color:#888;font-weight:600">FSI</span><span style="color:#666;font-style:italic">Site-specific</span>';
+    if(z.heightLimit) html+='<span style="color:#888;font-weight:600">Height</span><span style="font-weight:700">'+z.heightLimit+'m</span>';
+    if(z.coverage) html+='<span style="color:#888;font-weight:600">Coverage</span><span style="font-weight:700">'+(z.coverage*100).toFixed(0)+'%</span>';
+    html+='</div>';
+    // Permitted uses
+    if(z.permitted&&z.permitted.length>0){
+      html+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid #ddd">';
+      html+='<div style="font-size:9px;color:#888;font-weight:600;letter-spacing:0.5px;margin-bottom:3px">PERMITTED USES</div>';
+      html+='<div style="display:flex;flex-wrap:wrap;gap:3px">';
+      z.permitted.forEach(p=>{html+='<span style="background:#f0f0f0;color:#333;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600">'+p+'</span>';});
+      html+='</div></div>';
+    }
+    // Exception warning
+    if(z.exception){
+      html+='<div style="margin-top:6px;padding:5px 8px;background:#fff8e8;border:1px solid #e8c87a;border-radius:4px;font-size:10px;color:#8a6d20">';
+      html+='<b>⚠ Exception #'+(z.exceptionNo||'—')+'</b>';
+      if(z.bylawException) html+=' <span style="color:#a08030">'+z.bylawException+'</span>';
+      html+='</div>';
+    }
+    // By-law reference
+    if(z.bylawSection){
+      html+='<div style="margin-top:4px;font-size:9px;color:#999">§ '+z.bylawSection+' · By-law 569-2013</div>';
+    }
+    // Apply to project button
+    html+='<button onclick="smApplyZoningToProject('+lat+','+lng+')" style="margin-top:8px;width:100%;background:#AEBC46;color:#111;border:none;border-radius:4px;padding:6px 0;cursor:pointer;font-weight:700;font-size:10px;letter-spacing:0.5px">APPLY TO PROJECT</button>';
+    html+='</div>';
+    _zoningPopup.setHTML(html);
+  }).catch(e=>{
+    if(_zoningPopup) _zoningPopup.setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#c44;font-size:10px;font-weight:700">QUERY FAILED</div><div style="color:#888;font-size:10px;margin-top:4px">'+e.message+'</div></div>');
+  });
+}
+
+// Apply clicked zoning data to the current project
+async function smApplyZoningToProject(lat,lng){
+  try{
+    const z=await detectZoning(lat,lng);
+    if(z&&z.zone){
+      P.zoning=z;
+      autoSave();
+      smShowToast('Zoning applied: '+(z.zoneString||z.zone),'#AEBC46');
+      // Update the zoning info panel
+      const zi=document.getElementById('zoning-info');
+      if(zi){
+        zi.style.display='block';
+        zi.innerHTML=`
+          <div style="color:#4ecdc4;font-weight:700;font-size:11px;margin-bottom:6px">📋 ZONING — By-law 569-2013</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <div><span style="color:#888">Zone:</span> <b style="color:#AEBC46">${z.zoneString||z.zone}</b></div>
+            <div><span style="color:#888">Max FSI:</span> <b style="color:#AEBC46">${z.fsiLimit?z.fsiLimit+'×':'Site-specific'}</b></div>
+            <div><span style="color:#888">Height:</span> <b style="color:#AEBC46">${z.heightLimit?z.heightLimit+'m':'No overlay'}</b></div>
+            <div><span style="color:#888">Coverage:</span> <b style="color:#AEBC46">${z.coverage?(z.coverage*100).toFixed(0)+'%':'—'}</b></div>
+          </div>
+          <div style="margin-top:4px"><span style="color:#888">Permitted:</span> <span style="color:#eee">${z.permitted.join(', ')}</span></div>
+          ${z.exception?'<div style="margin-top:4px;color:#e8c87a">⚠ Exception #'+z.exceptionNo+' applies</div>':''}
+        `;
+      }
+      try{renderReport();}catch(e){}
+    }
+  }catch(e){smShowToast('Failed to apply zoning','#c44');}
+}
+
+function smUpdateZoningToggleUI(on){
+  const row=document.getElementById('zoning-toggle-row');
+  const sw=document.getElementById('zoning-toggle-switch');
+  const knob=document.getElementById('zoning-toggle-knob');
+  const label=document.getElementById('zoning-toggle-label');
+  const sub=document.getElementById('zoning-toggle-sub');
+  if(on){
+    if(row) row.style.border='1px solid #AEBC46';
+    if(sw) sw.style.background='#AEBC46';
+    if(knob){knob.style.left='16px';knob.style.background='#111';}
+    if(label){label.style.color='#AEBC46';label.textContent='ZONING ON';}
+    if(sub){sub.style.color='#AEBC46';sub.textContent='ON — Click map to identify zoning';}
+  } else {
+    if(row) row.style.border='1px solid #333';
+    if(sw) sw.style.background='#333';
+    if(knob){knob.style.left='2px';knob.style.background='#666';}
+    if(label){label.style.color='#ccc';label.textContent='ZONING';}
+    if(sub){sub.style.color='#666';sub.textContent='Click to show zoning overlay';}
+  }
+}
+
+/**
+ * Toggles the Toronto zoning WMS raster overlay on or off, and registers
+ * a click handler for point-based zoning identification when active.
+ */
+async function toggleZoningOverlay(){
+  if(!smMap)return;
+  _zoningOverlayVisible=!_zoningOverlayVisible;
+
+  if(!_zoningOverlayVisible){
+    try{if(smMap.getLayer('zoning-tiles'))smMap.removeLayer('zoning-tiles');}catch(e){}
+    try{if(smMap.getSource('zoning-wms'))smMap.removeSource('zoning-wms');}catch(e){}
+    // Remove click handler & popup
+    smMap.off('click',_smZoningClickHandler);
+    if(_zoningPopup){_zoningPopup.remove();_zoningPopup=null;}
+    if(!smLotDrawing&&!smBldgDrawing) smMap.getCanvas().style.cursor='';
+    smUpdateZoningToggleUI(false);
+    return;
+  }
+
+  smUpdateZoningToggleUI(true);
+
+  // Use ArcGIS MapServer export as a raster tile source (no CORS issues, lightweight)
+  try{if(smMap.getSource('zoning-wms'))smMap.removeSource('zoning-wms');}catch(e){}
+  smMap.addSource('zoning-wms',{
+    type:'raster',
+    tiles:[
+      'https://gis.toronto.ca/arcgis/rest/services/cot_geospatial11/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&layers=show:3&f=image'
+    ],
+    tileSize:512
+  });
+  smMap.addLayer({
+    id:'zoning-tiles',type:'raster',source:'zoning-wms',
+    paint:{'raster-opacity':0.5}
+  });
+
+  // Register click handler for zoning identify
+  smMap.off('click',_smZoningClickHandler); // prevent duplicates
+  smMap.on('click',_smZoningClickHandler);
+  if(!smLotDrawing&&!smBldgDrawing) smMap.getCanvas().style.cursor='pointer';
+  smShowToast('Zoning overlay active — click anywhere to identify','#AEBC46');
+}
+
+// Auto-detect zoning using Toronto ArcGIS REST API (no CORS issues, lightweight queries)
+const ZONING_ARCGIS='https://gis.toronto.ca/arcgis/rest/services/cot_geospatial11/FeatureServer';
+
+/**
+ * Queries the Toronto ArcGIS REST API to detect zoning designation, FSI limits,
+ * height overlays, and permitted uses for a given coordinate.
+ * @param {number} lat - Latitude of the query point.
+ * @param {number} lng - Longitude of the query point.
+ * @returns {Promise<Object>} Zoning result with zone, fsiLimit, heightLimit, permitted uses, etc.
+ */
+async function detectZoning(lat,lng){
+  const result={zone:null,zoneString:null,height:null,lotCoverage:null,policy:null,permitted:[],fsiLimit:null,fsiResi:null,fsiComm:null,fsiEmploy:null,heightLimit:null,exception:null,exceptionNo:null,bylawSection:null,bylawException:null,coverage:null};
+
+  try{
+    // Query Zoning Area layer (ID: 3) by point
+    const url=ZONING_ARCGIS+'/3/query?geometry='+lng+','+lat+'&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&f=json&returnGeometry=false';
+    const resp=await fetch(url,{signal:AbortSignal.timeout(10000)});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const data=await resp.json();
+
+    if(data.features&&data.features.length>0){
+      const p=data.features[0].attributes;
+      result.zone=p.ZN_ZONE||'Unknown';
+      result.zoneString=p.ZN_STRING||result.zone;
+      result.fsiLimit=p.FSI_TOTAL>0?p.FSI_TOTAL:null;
+      result.fsiResi=p.FSI_RESIDENTIAL_USE>0?p.FSI_RESIDENTIAL_USE:null;
+      result.fsiComm=p.FSI_COMMERCIAL_USE>0?p.FSI_COMMERCIAL_USE:null;
+      result.fsiEmploy=p.FSI_EMPLOYMENT_USE>0?p.FSI_EMPLOYMENT_USE:null;
+      result.coverage=p.ZN_COVERAGE>0?p.ZN_COVERAGE:null;
+      result.exception=(p.ZN_EXCPTN==='Y');
+      result.exceptionNo=p.ZN_EXCPTN_NO||null;
+      result.bylawSection=p.ZBL_SECTION||null;
+      result.bylawException=p.ZBL_EXCPTN||null;
+
+      // Parse permitted uses from zone code
+      const zc=(result.zone||'').toUpperCase();
+      if(zc.startsWith('CRE'))result.permitted=['Commercial','Residential','Employment','Mixed-Use'];
+      else if(zc.startsWith('CR'))result.permitted=['Commercial','Residential','Mixed-Use'];
+      else if(zc.startsWith('C'))result.permitted=['Commercial','Retail','Office'];
+      else if(zc.startsWith('RA'))result.permitted=['Residential Apartment'];
+      else if(zc.startsWith('RD'))result.permitted=['Residential Detached'];
+      else if(zc.startsWith('RS'))result.permitted=['Residential Semi-Detached'];
+      else if(zc.startsWith('RT'))result.permitted=['Residential Townhouse'];
+      else if(zc.startsWith('R'))result.permitted=['Residential'];
+      else if(zc.startsWith('EL'))result.permitted=['Employment Light Industrial'];
+      else if(zc.startsWith('EH'))result.permitted=['Employment Heavy Industrial'];
+      else if(zc.startsWith('EO'))result.permitted=['Employment Office'];
+      else if(zc.startsWith('E'))result.permitted=['Employment','Industrial','Office'];
+      else if(zc.startsWith('I'))result.permitted=['Institutional'];
+      else if(zc.startsWith('OS'))result.permitted=['Open Space — Natural'];
+      else if(zc.startsWith('OR'))result.permitted=['Open Space — Recreation'];
+      else if(zc.startsWith('O'))result.permitted=['Open Space'];
+      else if(zc.startsWith('U'))result.permitted=['Utility'];
+      else result.permitted=['See By-law 569-2013'];
+
+      // Parse FSI from zone string if not in fields (e.g. "CR 3.0 (x142)")
+      if(!result.fsiLimit){
+        const fsiMatch=(result.zoneString||'').match(/([\d.]+)\s*(?:\(|$)/);
+        if(fsiMatch)result.fsiLimit=parseFloat(fsiMatch[1]);
+      }
+    }
+  }catch(e){
+    console.warn('Zoning area query failed:',e.message);
+  }
+
+  // Query Height Overlay layer (try layer IDs that might contain height data)
+  try{
+    // Height overlay is typically in a separate layer — check layers 4-10
+    for(const layerId of [4,5,6,7]){
+      try{
+        const url=ZONING_ARCGIS+'/'+layerId+'/query?geometry='+lng+','+lat+'&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&f=json&returnGeometry=false';
+        const resp=await fetch(url,{signal:AbortSignal.timeout(5000)});
+        if(!resp.ok)continue;
+        const data=await resp.json();
+        if(data.features&&data.features.length>0){
+          const p=data.features[0].attributes;
+          // Look for height-related fields
+          if(p.HT_TXT||p.HEIGHT||p.ZN_ZONE){
+            const htStr=p.HT_TXT||p.HEIGHT||p.ZN_ZONE||'';
+            const htMatch=(htStr+'').match(/([\d.]+)/);
+            if(htMatch){result.heightLimit=parseFloat(htMatch[1]);result.height=htStr;}
+            break;
+          }
+        }
+      }catch(e){continue;}
+    }
+  }catch(e){}
+
+  return result;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// PARCEL PICKER — Click-to-select property lot boundaries
+// Uses free municipal ArcGIS Feature Services (CORS-enabled)
+// ══════════════════════════════════════════════════════════════════════
+
+const PARCEL_SERVICES=[
+  // Service registry — ordered by reliability
+  // PRIMARY: ArcGIS Online hosted (Esri cloud) — fast, ~0.2s, always available
+  // FALLBACK: gis.toronto.ca on-premise — can be slow/timeout under load
+  {
+    name:'City of Toronto',
+    url:'https://services3.arcgis.com/b9WvedVPoizGfvfD/ArcGIS/rest/services/COTGEO_MUN_PARCEL/FeatureServer/0/query',
+    bounds:{minLng:-79.65,maxLng:-79.10,minLat:43.58,maxLat:43.86},
+    fields:'ADDRESS_NUMBER,LINEAR_NAME_FULL,STATEDAREA,PARCELID,FEATURE_TYPE,Shape__Area',
+    distance:10,
+    filterType:'COMMON', // Skip CORRIDOR (roads), RESERVE parcels
+    parse:p=>({
+      address:(p.ADDRESS_NUMBER||'')+' '+(p.LINEAR_NAME_FULL||''),
+      parcelId:p.PARCELID||null,
+      areaSqM:p.Shape__Area||null,
+      featureType:p.FEATURE_TYPE||null,
+      owner:null, zoningCode:null
+    })
+  },
+  {
+    name:'City of Toronto (backup)',
+    url:'https://gis.toronto.ca/arcgis/rest/services/cot_geospatial27/MapServer/34/query',
+    bounds:{minLng:-79.65,maxLng:-79.10,minLat:43.58,maxLat:43.86},
+    fields:'ADDRESS_NUMBER,LINEAR_NAME_FULL,STATEDAREA,PARCELID',
+    distance:15,
+    parse:p=>({
+      address:(p.ADDRESS_NUMBER||'')+' '+(p.LINEAR_NAME_FULL||''),
+      parcelId:p.PARCELID||null,
+      areaSqM:p['SHAPE.AREA']||p.Shape__Area||null,
+      owner:null, zoningCode:null
+    })
+  },
+  {
+    name:'City of Hamilton',
+    url:'https://spatialsolutions.hamilton.ca/webgis/rest/services/General/Property/MapServer/19/query',
+    bounds:{minLng:-80.25,maxLng:-79.55,minLat:43.15,maxLat:43.45},
+    fields:'PROPERTY_ADDRESS,ROLL_NO,ASSESSMENT_2021',
+    parse:p=>({
+      address:p.PROPERTY_ADDRESS||null,
+      parcelId:p.ROLL_NO||null,
+      areaSqM:null,
+      assessedValue:p.ASSESSMENT_2021||null
+    })
+  },
+  {
+    name:'City of Mississauga',
+    url:'https://services6.arcgis.com/hM5ymMLbxIyWTjn2/arcgis/rest/services/Parcel/FeatureServer/0/query',
+    bounds:{minLng:-79.82,maxLng:-79.50,minLat:43.50,maxLat:43.72},
+    fields:'CITY_PIN,GIS_AREA,Shape__Area',
+    parse:p=>({
+      address:null,
+      parcelId:p.CITY_PIN||null,
+      areaSqM:p.GIS_AREA||p.Shape__Area||null
+    })
+  }
+];
+
+let smParcelPickerActive=false;
+let smSelectedParcels=[];       // Array of {ringCoords, attributes, serviceName, geojsonFeature}
+let smMultiParcelMode=false;    // true when accumulating parcels
+let _smParcelClickBusy=false;   // guard against concurrent click handlers
+let _smActivePopup=null;        // track active loading popup to prevent accumulation
+
+// ── Vertex / Edge Snapping for Adjacent Parcels ──
+// When two parcels share a boundary that differs by a few feet in the
+// ArcGIS data, we snap vertices together so turf.union produces a clean
+// merge without zig-zag slivers.
+
+/**
+ * Distance in metres between two [lng,lat] points (Haversine, inline).
+ */
+function _snapDistM(a,b){
+  const dLat=(b[1]-a[1])*Math.PI/180, dLng=(b[0]-a[0])*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(a[1]*Math.PI/180)*Math.cos(b[1]*Math.PI/180)*Math.sin(dLng/2)**2;
+  return 6371000*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+}
+
+/**
+ * Closest point on segment [p1,p2] to point pt, all [lng,lat].
+ * Returns {point:[lng,lat], dist:metres, t:0-1 parametric}.
+ */
+function _closestPointOnSegment(pt,p1,p2){
+  const dx=p2[0]-p1[0], dy=p2[1]-p1[1];
+  const len2=dx*dx+dy*dy;
+  if(len2<1e-20) return {point:[...p1],dist:_snapDistM(pt,p1),t:0};
+  let t=((pt[0]-p1[0])*dx+(pt[1]-p1[1])*dy)/len2;
+  t=Math.max(0,Math.min(1,t));
+  const proj=[p1[0]+t*dx, p1[1]+t*dy];
+  return {point:proj,dist:_snapDistM(pt,proj),t};
+}
+
+/**
+ * Snap vertices of `newVerts` to nearby vertices/edges of all already-
+ * selected parcels.  Mutates and returns the snapped array.
+ *
+ * Two-pass approach:
+ *   Pass 1 — vertex-to-vertex: if a new vertex is within `tolM` of an
+ *            existing vertex, snap it exactly onto that vertex.
+ *   Pass 2 — vertex-to-edge:   if a new vertex is within `tolM` of an
+ *            edge of an existing parcel (but not near a vertex), snap it
+ *            onto the closest point on that edge AND insert the same
+ *            point into the existing parcel's ring so both polygons
+ *            share the vertex.  (This prevents turf.union slivers.)
+ *
+ * @param {Array} newVerts  — [[lng,lat], ...] open ring (no closing dup)
+ * @param {number} tolM     — snap tolerance in metres (default 3 ≈ 10 ft)
+ * @returns {Array}         — snapped newVerts (same length or reference)
+ */
+function _snapParcelVerts(newVerts, tolM){
+  tolM=tolM||3;
+  if(smSelectedParcels.length===0) return newVerts;
+
+  // Collect all existing vertices across selected parcels
+  const existVerts=[];
+  smSelectedParcels.forEach(p=>{
+    p.ringCoords.forEach(v=>existVerts.push(v));
+  });
+
+  // Pass 1 — vertex-to-vertex snap
+  for(let i=0;i<newVerts.length;i++){
+    let bestD=Infinity, bestV=null;
+    for(const ev of existVerts){
+      const d=_snapDistM(newVerts[i],ev);
+      if(d<bestD){bestD=d;bestV=ev;}
+    }
+    if(bestD<tolM && bestV){
+      newVerts[i]=[bestV[0],bestV[1]];
+    }
+  }
+
+  // Pass 2 — vertex-to-edge snap (for vertices NOT already snapped)
+  for(let i=0;i<newVerts.length;i++){
+    // Skip if already coincident with an existing vertex
+    const alreadySnapped=existVerts.some(ev=>
+      Math.abs(ev[0]-newVerts[i][0])<1e-9 && Math.abs(ev[1]-newVerts[i][1])<1e-9
+    );
+    if(alreadySnapped) continue;
+
+    let bestD=Infinity, bestPt=null, bestParcelIdx=-1, bestEdgeIdx=-1;
+    smSelectedParcels.forEach((p,pi)=>{
+      const ring=p.ringCoords;
+      for(let j=0;j<ring.length;j++){
+        const nj=(j+1)%ring.length;
+        const cp=_closestPointOnSegment(newVerts[i],ring[j],ring[nj]);
+        // Exclude endpoints (already handled by pass 1)
+        if(cp.t<0.01||cp.t>0.99) continue;
+        if(cp.dist<bestD){bestD=cp.dist;bestPt=cp.point;bestParcelIdx=pi;bestEdgeIdx=j;}
+      }
+    });
+    if(bestD<tolM && bestPt){
+      // Snap the new vertex onto the edge
+      newVerts[i]=[bestPt[0],bestPt[1]];
+      // Insert this point into the existing parcel's ring so both share it
+      if(bestParcelIdx>=0){
+        const ring=smSelectedParcels[bestParcelIdx].ringCoords;
+        ring.splice(bestEdgeIdx+1,0,[bestPt[0],bestPt[1]]);
+        // Rebuild that parcel's geojsonFeature with the updated ring
+        const closed=[...ring,ring[0]];
+        smSelectedParcels[bestParcelIdx].geojsonFeature=turf.polygon([closed]);
+      }
+    }
+  }
+
+  // Pass 3 — reverse: snap existing parcel vertices onto edges of the new parcel
+  // This catches the case where an existing vertex falls near a new parcel's edge
+  smSelectedParcels.forEach((p,pi)=>{
+    const ring=p.ringCoords;
+    for(let k=0;k<ring.length;k++){
+      // Skip if already coincident with a new vertex
+      const alreadyCoinc=newVerts.some(nv=>
+        Math.abs(nv[0]-ring[k][0])<1e-9 && Math.abs(nv[1]-ring[k][1])<1e-9
+      );
+      if(alreadyCoinc) continue;
+
+      let bestD=Infinity, bestPt=null, bestEdgeIdx=-1;
+      for(let j=0;j<newVerts.length;j++){
+        const nj=(j+1)%newVerts.length;
+        const cp=_closestPointOnSegment(ring[k],newVerts[j],newVerts[nj]);
+        if(cp.t<0.01||cp.t>0.99) continue;
+        if(cp.dist<bestD){bestD=cp.dist;bestPt=cp.point;bestEdgeIdx=j;}
+      }
+      if(bestD<tolM && bestPt){
+        // Snap existing vertex onto the new parcel's edge point
+        ring[k]=[bestPt[0],bestPt[1]];
+        // Insert this shared point into the new ring
+        newVerts.splice(bestEdgeIdx+1,0,[bestPt[0],bestPt[1]]);
+      }
+    }
+    // Rebuild geojsonFeature if ring was modified
+    const closed=[...ring,ring[0]];
+    p.geojsonFeature=turf.polygon([closed]);
+  });
+
+  return newVerts;
+}
+
+/**
+ * After turf.union, simplify the merged ring to remove micro-edges
+ * (remnants of near-coincident boundaries that didn't fully collapse).
+ * Removes vertices that are within `tolM` of the line between their
+ * neighbours (collinear within tolerance).
+ */
+function _cleanMergedRing(ring, tolM){
+  tolM=tolM||1.5; // tighter tolerance for post-merge cleanup
+  if(ring.length<4) return ring;
+  let changed=true;
+  while(changed){
+    changed=false;
+    const out=[];
+    for(let i=0;i<ring.length;i++){
+      const prev=i===0?ring[ring.length-1]:out[out.length-1]||ring[ring.length-1];
+      const next=ring[(i+1)%ring.length];
+      const cp=_closestPointOnSegment(ring[i],prev,next);
+      if(cp.dist<tolM && ring.length-out.length+(ring.length-i-1)>=3){
+        // This vertex is nearly collinear — skip it
+        changed=true;
+        continue;
+      }
+      out.push(ring[i]);
+    }
+    if(out.length<3) return ring; // safety: don't degenerate
+    ring=out;
+  }
+  return ring;
+}
+
+/**
+ * Remove duplicate consecutive vertices from a ring (within tolerance).
+ */
+function _dedupeRing(ring, tolM){
+  tolM=tolM||0.5;
+  if(ring.length<2) return ring;
+  const out=[ring[0]];
+  for(let i=1;i<ring.length;i++){
+    if(_snapDistM(ring[i],out[out.length-1])>tolM) out.push(ring[i]);
+  }
+  return out;
+}
+
+/**
+ * Toggles the multi-parcel picker mode on the map. When active, clicking
+ * parcels selects them for merging into a single development lot.
+ */
+function smToggleParcelPicker(){
+  if(!smMap){smShowToast('Initialize the map first (enter Mapbox token)','#c44');return;}
+  if(smLotDrawing){smShowToast('Finish or cancel lot drawing first','#c44');return;}
+  if(smBldgDrawing){smShowToast('Finish or cancel building drawing first','#c44');return;}
+  if(smEditLotActive){smShowToast('Finish lot editing first','#c44');return;}
+
+  smParcelPickerActive=!smParcelPickerActive;
+  const btn=document.getElementById('btn-pick-parcel');
+
+  if(smParcelPickerActive){
+    // Turn OFF zoning click handler while parcel picker is active
+    if(_zoningOverlayVisible){toggleZoningOverlay();}
+    // Enter multi-parcel mode
+    smMultiParcelMode=true;
+    smSelectedParcels=[];
+    smMap.on('click',smParcelClickHandler);
+    smMap.getCanvas().style.cursor='crosshair';
+    if(btn){btn.style.background='#AEBC46';btn.style.color='#111';}
+    // Show multi-parcel bar
+    const bar=document.getElementById('sm-multi-parcel-bar');
+    if(bar) bar.style.display='block';
+    smUpdateMultiParcelUI();
+    // Clear any previous multi-parcel preview layers
+    smClearMultiParcelLayers();
+    const instrEl=document.getElementById('sitemap-instructions');
+    if(instrEl) instrEl.innerHTML='<span style="color:#AEBC46;font-weight:700">PARCEL PICKER ACTIVE</span> — click parcels to select · pick multiple then merge';
+    smShowToast('Click properties to select — pick multiple to merge','#AEBC46');
+  } else {
+    smCancelMultiParcel();
+  }
+}
+
+function smCancelMultiParcel(){
+  smParcelPickerActive=false;
+  smMultiParcelMode=false;
+  smSelectedParcels=[];
+  if(smMap){
+    smMap.off('click',smParcelClickHandler);
+    smMap.getCanvas().style.cursor='';
+  }
+  const btn=document.getElementById('btn-pick-parcel');
+  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+  const bar=document.getElementById('sm-multi-parcel-bar');
+  if(bar) bar.style.display='none';
+  smClearMultiParcelLayers();
+  const instrEl=document.getElementById('sitemap-instructions');
+  if(instrEl) instrEl.innerHTML='Click <b style="color:#AEBC46">DRAW LOT</b> or <b style="color:#AEBC46">PICK PARCEL</b>';
+}
+
+function smClearMultiParcelLayers(){
+  if(!smMap) return;
+  // Remove preview layers for each selected parcel
+  for(let i=0;i<20;i++){
+    const lid='sm-multi-parcel-fill-'+i;
+    const lid2='sm-multi-parcel-line-'+i;
+    const sid='sm-multi-parcel-'+i;
+    try{if(smMap.getLayer(lid)) smMap.removeLayer(lid);}catch(e){}
+    try{if(smMap.getLayer(lid2)) smMap.removeLayer(lid2);}catch(e){}
+    try{if(smMap.getSource(sid)) smMap.removeSource(sid);}catch(e){}
+  }
+}
+
+function smUpdateMultiParcelUI(){
+  const count=smSelectedParcels.length;
+  const badge=document.getElementById('sm-parcel-badge');
+  if(badge) badge.textContent=count;
+
+  const countEl=document.getElementById('sm-multi-parcel-count');
+  if(countEl){
+    if(count===0) countEl.textContent='Click parcels to add them';
+    else if(count===1) countEl.textContent='1 parcel selected — click more or apply';
+    else countEl.textContent=count+' parcels selected — ready to merge';
+  }
+
+  // Enable/disable merge & undo buttons + dynamic label
+  const mergeBtn=document.getElementById('btn-merge-parcels');
+  const undoBtn=document.getElementById('btn-undo-parcel');
+  if(mergeBtn){
+    if(count>=1){mergeBtn.style.opacity='1';mergeBtn.style.pointerEvents='auto';}
+    else{mergeBtn.style.opacity='0.4';mergeBtn.style.pointerEvents='none';}
+    mergeBtn.textContent=count>1?'🔗 MERGE & APPLY ('+count+')':'✅ APPLY PARCEL';
+  }
+  if(undoBtn){
+    if(count>=1){undoBtn.style.opacity='1';undoBtn.style.pointerEvents='auto';}
+    else{undoBtn.style.opacity='0.4';undoBtn.style.pointerEvents='none';}
+  }
+
+  // Render selected parcels list
+  const listEl=document.getElementById('sm-selected-parcels-list');
+  if(!listEl) return;
+  if(count===0){listEl.innerHTML='';return;}
+  // Show combined area total
+  const totalSf=smSelectedParcels.reduce((s,p)=>s+(p.areaSqFt||0),0);
+  const colors=['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+  listEl.innerHTML=smSelectedParcels.map((p,i)=>{
+    const col=colors[i%colors.length];
+    const addr=(p.attributes.address||'').trim();
+    const label=addr&&addr.length>2?addr:'Parcel '+(i+1);
+    const area=p.areaSqFt?Math.round(p.areaSqFt).toLocaleString()+' sf':'';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;background:#111;margin-bottom:3px;font-size:10px">
+      <div style="width:10px;height:10px;border-radius:2px;background:${col};flex-shrink:0"></div>
+      <div style="flex:1;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+      <div style="color:#888;font-size:9px">${area}</div>
+      <div onclick="smRemoveParcel(${i})" style="color:#c44;cursor:pointer;font-size:12px;padding:0 2px" title="Remove">✕</div>
+    </div>`;
+  }).join('')+(count>1?`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-top:1px solid #333;margin-top:3px;font-size:10px;font-weight:700">
+    <span style="color:#888">COMBINED TOTAL</span><span style="color:#AEBC46">${Math.round(totalSf).toLocaleString()} sf</span>
+  </div>`:'');
+}
+
+function smRenderMultiParcelPreview(){
+  if(!smMap) return;
+  smClearMultiParcelLayers();
+  const colors=['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+  smSelectedParcels.forEach((p,i)=>{
+    const sid='sm-multi-parcel-'+i;
+    const col=colors[i%colors.length];
+    smMap.addSource(sid,{type:'geojson',data:p.geojsonFeature});
+    smMap.addLayer({id:'sm-multi-parcel-fill-'+i,type:'fill',source:sid,paint:{'fill-color':col,'fill-opacity':0.18}});
+    smMap.addLayer({id:'sm-multi-parcel-line-'+i,type:'line',source:sid,paint:{'line-color':col,'line-width':2.5,'line-dasharray':[3,2]}});
+  });
+  // Fit to all selected parcels
+  if(smSelectedParcels.length>0){
+    let allLngs=[],allLats=[];
+    smSelectedParcels.forEach(p=>{
+      p.ringCoords.forEach(c=>{allLngs.push(c[0]);allLats.push(c[1]);});
+    });
+    smMap.fitBounds([[Math.min(...allLngs),Math.min(...allLats)],[Math.max(...allLngs),Math.max(...allLats)]],{padding:80,duration:600});
+  }
+}
+
+function smRemoveParcel(idx){
+  smSelectedParcels.splice(idx,1);
+  smUpdateMultiParcelUI();
+  smRenderMultiParcelPreview();
+}
+
+function smUndoLastParcel(){
+  if(smSelectedParcels.length>0){
+    smSelectedParcels.pop();
+    smUpdateMultiParcelUI();
+    smRenderMultiParcelPreview();
+    smShowToast('Last parcel removed','#888');
+  }
+}
+
+/**
+ * Merges all selected parcels into a single polygon using turf.union and
+ * applies the result as the active lot boundary on the site map.
+ */
+function smMergeAndApplyParcels(){
+  if(smSelectedParcels.length===0){smShowToast('No parcels selected','#c44');return;}
+
+  let mergedRing;
+  if(smSelectedParcels.length===1){
+    // Single parcel — just use its ring directly
+    mergedRing=smSelectedParcels[0].ringCoords;
+  } else {
+    // Multiple parcels — union them with turf.union
+    try{
+      let merged=smSelectedParcels[0].geojsonFeature;
+      for(let i=1;i<smSelectedParcels.length;i++){
+        merged=turf.union(turf.featureCollection([merged,smSelectedParcels[i].geojsonFeature]));
+        if(!merged){
+          smShowToast('Parcels could not be merged (non-adjacent?)','#c44');
+          return;
+        }
+      }
+      // Extract the outer ring from the merged result
+      if(merged.geometry.type==='MultiPolygon'){
+        // Take the largest polygon from the multi-polygon
+        let largestIdx=0,largestArea=0;
+        merged.geometry.coordinates.forEach((poly,idx)=>{
+          const a=turf.area(turf.polygon(poly));
+          if(a>largestArea){largestArea=a;largestIdx=idx;}
+        });
+        mergedRing=merged.geometry.coordinates[largestIdx][0];
+        smShowToast('Parcels not fully adjacent — using largest merged area','#e8c87a');
+      } else {
+        mergedRing=merged.geometry.coordinates[0];
+      }
+    }catch(err){
+      console.error('Merge error:',err);
+      smShowToast('Merge failed: '+err.message,'#c44');
+      return;
+    }
+  }
+
+  // ── Post-merge cleanup: remove micro-edges, dedupe, smooth zig-zags ──
+  // Remove closing vertex if present (smApplyParcelAsLot expects open ring)
+  if(mergedRing.length>1){
+    const f=mergedRing[0],l=mergedRing[mergedRing.length-1];
+    if(Math.abs(f[0]-l[0])<1e-8&&Math.abs(f[1]-l[1])<1e-8) mergedRing=mergedRing.slice(0,-1);
+  }
+  mergedRing=_dedupeRing(mergedRing,0.3);
+  mergedRing=_cleanMergedRing(mergedRing,1.5);
+  if(mergedRing.length<3){smShowToast('Merged polygon degenerated — try again','#c44');return;}
+
+  // Build combined attributes
+  const addrs=smSelectedParcels.map(p=>(p.attributes.address||'').trim()).filter(a=>a.length>2);
+  const combinedAttrs={
+    address:addrs.length>0?addrs.join(' + '):null,
+    parcelId:smSelectedParcels.map(p=>p.attributes.parcelId).filter(Boolean).join('+'),
+    areaSqM:null, owner:null, zoningCode:null
+  };
+  const svcName=smSelectedParcels[0].serviceName;
+
+  // Clean up multi-parcel mode
+  smClearMultiParcelLayers();
+  smParcelPickerActive=false;
+  smMultiParcelMode=false;
+  smSelectedParcels=[];
+  if(smMap){smMap.off('click',smParcelClickHandler);smMap.getCanvas().style.cursor='';}
+  const btn=document.getElementById('btn-pick-parcel');
+  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+  const bar=document.getElementById('sm-multi-parcel-bar');
+  if(bar) bar.style.display='none';
+
+  // Apply the merged polygon as the lot
+  smApplyParcelAsLot(mergedRing, combinedAttrs, svcName);
+}
+
+async function smParcelClickHandler(e){
+  if(!smParcelPickerActive)return;
+  // Guard against concurrent clicks — reject if already processing
+  if(_smParcelClickBusy){console.log('Parcel click ignored — still processing previous');return;}
+  _smParcelClickBusy=true;
+  const lng=e.lngLat.lng, lat=e.lngLat.lat;
+
+  // Remove any stale loading popup from a previous click
+  if(_smActivePopup){try{_smActivePopup.remove();}catch(ex){}_smActivePopup=null;}
+
+  // Show loading popup with progress
+  const popup=new mapboxgl.Popup({maxWidth:'280px',className:'zoning-popup',closeOnClick:false})
+    .setLngLat([lng,lat])
+    .setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#AEBC46;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">QUERYING PARCEL...</div><div style="color:#888;font-size:10px">Searching property boundaries...</div><div style="margin-top:6px;height:2px;background:#333;border-radius:1px;overflow:hidden"><div id="parcel-progress" style="width:10%;height:100%;background:#AEBC46;transition:width 0.5s"></div></div></div>')
+    .addTo(smMap);
+  _smActivePopup=popup;
+
+  // Animate progress bar while waiting
+  let progPct=10;
+  const progInterval=setInterval(()=>{
+    progPct=Math.min(progPct+8,90);
+    const bar=document.getElementById('parcel-progress');
+    if(bar) bar.style.width=progPct+'%';
+  },1500);
+
+  try{
+    // Try up to 2 attempts (retry once on failure — server may be temporarily overloaded)
+    let result=null;
+    for(let attempt=0;attempt<2;attempt++){
+      result=await queryParcelAtPoint(lat,lng);
+      if(result) break;
+      if(attempt===0){
+        // First attempt failed — update popup and retry
+        popup.setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#e8c87a;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">RETRYING...</div><div style="color:#888;font-size:10px">City server was slow — trying again...</div><div style="margin-top:6px;height:2px;background:#333;border-radius:1px;overflow:hidden"><div id="parcel-progress" style="width:30%;height:100%;background:#e8c87a;transition:width 0.5s"></div></div></div>');
+        await new Promise(r=>setTimeout(r,1000)); // 1s pause before retry
+      }
+    }
+    clearInterval(progInterval);
+
+    if(!result){
+      popup.setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#c44;font-size:10px;font-weight:700">NO PARCEL FOUND</div><div style="color:#888;font-size:10px;margin-top:4px">City GIS server is currently slow/unresponsive.<br>Try again in a few minutes, or use <b>DRAW LOT</b> to trace manually.</div></div>');
+      setTimeout(()=>{try{popup.remove();}catch(ex){}_smActivePopup=null;},4000);
+      _smParcelClickBusy=false;
+      return;
+    }
+    popup.remove();_smActivePopup=null;
+
+    // Convert ArcGIS rings to GeoJSON polygon coordinates
+    const geojsonCoords=result.geometry.rings||result.geometry.coordinates;
+    if(!geojsonCoords||geojsonCoords.length===0){
+      smShowToast('Parcel found but has no geometry','#c44');
+      _smParcelClickBusy=false;return;
+    }
+
+    const ring=geojsonCoords[0];
+    // Remove duplicate closing vertex if present
+    let verts=[...ring];
+    if(verts.length>1){
+      const first=verts[0], last=verts[verts.length-1];
+      if(Math.abs(first[0]-last[0])<1e-8&&Math.abs(first[1]-last[1])<1e-8){
+        verts=verts.slice(0,-1);
+      }
+    }
+
+    // ── Snap vertices to already-selected parcels (within 3m ≈ ~10ft) ──
+    // This ensures shared boundaries are exactly coincident so turf.union
+    // merges cleanly without zig-zag slivers between adjacent parcels.
+    verts=_snapParcelVerts(verts, 3);
+    verts=_dedupeRing(verts, 0.3);
+
+    // Check for duplicate parcel — use polygon overlap, not centroid distance
+    // Two parcels are duplicates if >70% of the new parcel overlaps an existing one
+    const newPoly=turf.polygon([[...verts,verts[0]]]);
+    const newArea=turf.area(newPoly);
+    const isDuplicate=smSelectedParcels.some(p=>{
+      try{
+        const inter=turf.intersect(turf.featureCollection([newPoly,p.geojsonFeature]));
+        if(!inter) return false;
+        const overlapArea=turf.area(inter);
+        return overlapArea/newArea>0.7; // >70% overlap = same parcel
+      }catch(e){return false;}
+    });
+    if(isDuplicate){
+      smShowToast('This parcel is already selected','#e8c87a');
+      _smParcelClickBusy=false;
+      return;
+    }
+
+    // Build the GeoJSON feature for this parcel
+    const closedRing=[...verts,verts[0]];
+    const geojsonFeature=turf.polygon([closedRing]);
+    const areaSqFt=turf.area(geojsonFeature)*10.7639;
+
+    // Add to selected parcels
+    smSelectedParcels.push({
+      ringCoords:verts,
+      attributes:result.attributes,
+      serviceName:result.serviceName,
+      geojsonFeature,
+      areaSqFt
+    });
+
+    // Update UI
+    smUpdateMultiParcelUI();
+    smRenderMultiParcelPreview();
+
+    const addr=(result.attributes.address||'').trim();
+    const label=addr&&addr.length>2?addr:'Parcel '+smSelectedParcels.length;
+    smShowToast('Added: '+label+' ('+Math.round(areaSqFt).toLocaleString()+' sf)','#AEBC46');
+
+  }catch(err){
+    clearInterval(progInterval);
+    console.error('Parcel query error:',err);
+    popup.setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#c44;font-size:10px;font-weight:700">QUERY FAILED</div><div style="color:#888;font-size:10px;margin-top:4px">'+err.message+'</div></div>');
+    setTimeout(()=>{try{popup.remove();}catch(ex){}_smActivePopup=null;},4000);
+  }finally{
+    _smParcelClickBusy=false;
+  }
+}
+
+// Pick the best feature from a multi-feature result set
+function _pickBestFeature(features,lng,lat){
+  let best=features[0];
+  if(features.length>1){
+    const clickPt=turf.point([lng,lat]);
+    let foundContaining=false;
+    let bestDist=Infinity;
+    for(const feat of features){
+      const rings=feat.geometry.rings||feat.geometry.coordinates;
+      if(!rings||!rings[0]) continue;
+      try{
+        const ring=rings[0];
+        const first=ring[0],last=ring[ring.length-1];
+        const closed=(Math.abs(first[0]-last[0])<1e-8&&Math.abs(first[1]-last[1])<1e-8)?ring:[...ring,ring[0]];
+        const poly=turf.polygon([closed]);
+        if(turf.booleanPointInPolygon(clickPt,poly)){
+          if(!foundContaining){best=feat;foundContaining=true;bestDist=0;}
+          else{
+            const bRings=best.geometry.rings||best.geometry.coordinates;
+            const bRing=bRings[0];const bf=bRing[0],bl=bRing[bRing.length-1];
+            const bClosed=(Math.abs(bf[0]-bl[0])<1e-8&&Math.abs(bf[1]-bl[1])<1e-8)?bRing:[...bRing,bRing[0]];
+            if(turf.area(poly)<turf.area(turf.polygon([bClosed]))) best=feat;
+          }
+        } else if(!foundContaining){
+          const c=turf.centroid(poly);
+          const d=turf.distance(clickPt,c,{units:'meters'});
+          if(d<bestDist){bestDist=d;best=feat;}
+        }
+      }catch(ex){/* skip malformed geometry */}
+    }
+  }
+  return best;
+}
+
+// Query a single parcel service and return result or null
+async function _queryOneService(svc,lat,lng,timeoutMs){
+  const dist=svc.distance||5;
+  const url=svc.url
+    +'?geometry='+lng+','+lat
+    +'&geometryType=esriGeometryPoint'
+    +'&inSR=4326'
+    +'&outSR=4326'
+    +'&spatialRel=esriSpatialRelIntersects'
+    +'&distance='+dist+'&units=esriSRUnit_Meter'
+    +'&outFields='+(svc.fields||'*')
+    +'&returnGeometry=true'
+    +'&f=json';
+  const resp=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
+  if(!resp.ok) return null;
+  const data=await resp.json();
+  if(!data.features||data.features.length===0) return null;
+  // Filter out non-property features (roads, reserves) if service specifies a filter
+  let features=data.features;
+  if(svc.filterType){
+    const filtered=features.filter(f=>f.attributes.FEATURE_TYPE===svc.filterType);
+    if(filtered.length>0) features=filtered;
+  }
+  const best=_pickBestFeature(features,lng,lat);
+  const attrs=svc.parse?svc.parse(best.attributes):best.attributes;
+  return {geometry:best.geometry, attributes:attrs, serviceName:svc.name};
+}
+
+async function queryParcelAtPoint(lat,lng){
+  // Find matching services based on the click location
+  const matching=PARCEL_SERVICES.filter(s=>{
+    const b=s.bounds;
+    return lng>=b.minLng&&lng<=b.maxLng&&lat>=b.minLat&&lat<=b.maxLat;
+  });
+  const toTry=matching.length>0?matching:PARCEL_SERVICES;
+
+  // Race all matching services in parallel — first valid result wins
+  // This avoids the timeout cascade (25s × N services = minutes of waiting)
+  const promises=toTry.map(svc=>
+    _queryOneService(svc,lat,lng,20000).catch(e=>{
+      console.warn('Parcel query failed for '+svc.name+':',e.message);
+      return null;
+    })
+  );
+
+  // Use Promise.any — resolves with first non-null result
+  // Wrap each promise to reject on null so Promise.any skips it
+  try{
+    const result=await Promise.any(
+      promises.map(p=>p.then(r=>{if(r)return r;throw new Error('no data');}))
+    );
+    return result;
+  }catch(e){
+    // All services returned null or timed out — fall back to sequential with last resort
+    return null;
+  }
+}
+
+function smApplyParcelAsLot(ringCoords, attributes, serviceName){
+  // ringCoords = array of [lng, lat] from ArcGIS (already in WGS84)
+  // Ensure the ring is not closed (remove duplicate closing vertex)
+  let verts=[...ringCoords];
+  if(verts.length>1){
+    const first=verts[0], last=verts[verts.length-1];
+    if(Math.abs(first[0]-last[0])<1e-8&&Math.abs(first[1]-last[1])<1e-8){
+      verts=verts.slice(0,-1);
+    }
+  }
+  if(verts.length<3){smShowToast('Invalid parcel polygon (< 3 vertices)','#c44');return;}
+
+  // Turn off parcel picker
+  smParcelPickerActive=false;
+  if(smMap){smMap.off('click',smParcelClickHandler);smMap.getCanvas().style.cursor='';}
+  const btn=document.getElementById('btn-pick-parcel');
+  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+
+  // Build closed ring for GeoJSON
+  const closedCoords=[...verts,verts[0]];
+
+  // Render the parcel on the map (same layer system as manual lot drawing)
+  const poly={type:'Feature',geometry:{type:'Polygon',coordinates:[closedCoords]},properties:{}};
+  if(smMap){
+    if(smMap.getSource('sm-custom-lot')){
+      smMap.getSource('sm-custom-lot').setData(poly);
+    } else {
+      smMap.addSource('sm-custom-lot',{type:'geojson',data:poly});
+      smMap.addLayer({id:'sm-custom-lot-fill',type:'fill',source:'sm-custom-lot',paint:{'fill-color':'#AEBC46','fill-opacity':0.12}});
+      smMap.addLayer({id:'sm-custom-lot-line',type:'line',source:'sm-custom-lot',paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[3,2]}});
+    }
+    // Also clear/update the saved-lot layers if they exist
+    if(smMap.getSource('saved-lot')){
+      smMap.getSource('saved-lot').setData(poly);
+    }
+    // Fit map to parcel bounds
+    const lngs=verts.map(c=>c[0]), lats=verts.map(c=>c[1]);
+    smMap.fitBounds([[Math.min(...lngs),Math.min(...lats)],[Math.max(...lngs),Math.max(...lats)]],{padding:80,duration:600});
+  }
+
+  // Process lot data — reuse the same pipeline as smCloseLotPoly
+  const areaSqM=turf.area(poly);
+  const areaSqFt=areaSqM*10.7639;
+  const perimM=turf.length(turf.polygonToLine(poly.geometry),{units:'meters'});
+  const edges=[];
+  for(let i=0;i<verts.length;i++){
+    const a=verts[i],b=verts[(i+1)%verts.length];
+    const dM=turf.distance(turf.point(a),turf.point(b),{units:'meters'});
+    const dFt=dM*3.28084;
+    const bearing=turf.bearing(turf.point(a),turf.point(b));
+    const dirs=['N','NE','E','SE','S','SW','W','NW'];
+    const compass=dirs[Math.round(((bearing%360+360)%360)/45)%8];
+    edges.push({id:String.fromCharCode(65+i),from:a,to:b,lengthFt:dFt,lengthM:dM,compass});
+  }
+  smLotData={vertices:verts,geometry:poly.geometry,areaSqFt,areaSqM,perimFt:perimM*3.28084,edges,shape:verts.length+'pt polygon',vertexCount:verts.length};
+
+  // Set GPS centroid
+  const lotCentroid=turf.centroid(poly);
+  P.siteCoords={lat:lotCentroid.geometry.coordinates[1],lng:lotCentroid.geometry.coordinates[0]};
+  P.lot.gpsVerts=verts.map(v=>[v[0],v[1]]);
+
+  // Convert GPS → local feet (same algorithm as smOnDraw)
+  let originIdx=0, bestScore=Infinity;
+  for(let i=0;i<verts.length;i++){
+    const score=verts[i][0]*-1+verts[i][1]*-1; // southwestmost
+    if(score<bestScore){bestScore=score;originIdx=i;}
+  }
+  const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
+  const polyVerts=verts.map(v=>{
+    const xM=turf.distance(turf.point([originLng,originLat]),turf.point([v[0],originLat]),{units:'meters'});
+    const xFt=xM*3.28084*(v[0]>originLng?1:-1);
+    const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,v[1]]),{units:'meters'});
+    const zFt=zM*3.28084*(v[1]<originLat?1:-1);
+    return [Math.round(xFt),Math.round(zFt)];
+  });
+  let crossSum=0;
+  for(let i=0;i<polyVerts.length;i++){
+    const j=(i+1)%polyVerts.length;
+    crossSum+=(polyVerts[j][0]-polyVerts[i][0])*(polyVerts[j][1]+polyVerts[i][1]);
+  }
+  if(crossSum<0) polyVerts.reverse();
+
+  const allX=polyVerts.map(v=>v[0]), allZ=polyVerts.map(v=>v[1]);
+  const lotWidth=Math.max(...allX)-Math.min(...allX);
+  const lotDepth=Math.max(...allZ)-Math.min(...allZ);
+
+  P.lot={
+    polyVerts,
+    front:lotWidth,
+    upperRight:Math.round(lotDepth*0.5),
+    stepEast:0,
+    lowerRight:Math.round(lotDepth*0.5),
+    upperLeft:Math.round(lotDepth*0.7),
+    notchWest:0,
+    lowerLeft:Math.round(lotDepth*0.3),
+    rear:lotWidth,
+    gpsVerts:verts.map(v=>[v[0],v[1]])
+  };
+
+  // Reset setbacks and volumes for new lot
+  P.set={front:10,stepback:3,sideE:12,sideW:4,rear:10};
+  P.flr={gf:15,typ:10};
+  P.vols=[];
+
+  // Set project name from parcel address (if available)
+  const addrName=(attributes.address||'').trim();
+  if(addrName&&addrName.length>2){
+    P.projectName=addrName;
+    P.siteAddress=addrName;
+  } else {
+    P.projectName='Site at '+P.siteCoords.lat.toFixed(4)+', '+P.siteCoords.lng.toFixed(4);
+  }
+  const titleEl=document.getElementById('project-title');
+  if(titleEl) titleEl.textContent=P.projectName;
+  const nameInput=document.getElementById('project-name');
+  if(nameInput) nameInput.value=P.projectName;
+  document.title='OleaDev — '+P.projectName;
+
+  // Update lot info UI
+  smUpdateLotInfo(smLotData);
+
+  // Show attribution toast
+  smShowToast('Parcel imported from '+serviceName+' · '+Math.round(areaSqFt).toLocaleString()+' sf','#AEBC46');
+
+  // Auto-detect zoning at parcel centroid
+  try{
+    detectZoning(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
+      P.zoning=zoning;
+      if(zoning&&zoning.zone) smShowToast('Zoning detected: '+(zoning.zoneString||zoning.zone),'#4ecdc4');
+      const zi=document.getElementById('zoning-info');
+      if(zi&&zoning&&zoning.zone){
+        zi.style.display='block';
+        zi.innerHTML=`
+          <div style="color:#4ecdc4;font-weight:700;font-size:11px;margin-bottom:6px">📋 ZONING DETECTED — By-law 569-2013</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <div><span style="color:#888">Zone:</span> <b style="color:#AEBC46">${zoning.zoneString||zoning.zone}</b></div>
+            <div><span style="color:#888">Max FSI:</span> <b style="color:#AEBC46">${zoning.fsiLimit?zoning.fsiLimit+'×':'Site-specific'}</b></div>
+          </div>`;
+      }
+      autoSave();try{renderReport();}catch(e){}
+    }).catch(e=>{console.warn('Zoning detect error:',e);});
+  }catch(e){}
+
+  // Fetch comparables
+  P.comparables=[];
+  try{
+    fetchNearbyComparables(P.siteCoords.lat,P.siteCoords.lng,addrName).then(()=>{
+      smShowToast('Found '+P.comparables.length+' comparable'+(P.comparables.length!==1?'s':'')+' within 3km','#AEBC46');
+      smUpdateCompCount();
+    }).catch(e=>console.warn('Comparables error:',e));
+  }catch(e){}
+
+  // Reverse geocode for full address
+  try{
+    fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+P.siteCoords.lng+','+P.siteCoords.lat+'.json?access_token='+mapboxgl.accessToken)
+      .then(r=>r.json()).then(data=>{
+        if(data.features&&data.features.length>0){
+          P.siteAddress=data.features[0].place_name||P.siteAddress;
+          if(!addrName||addrName.length<3){
+            P.projectName=P.siteAddress.split(',')[0]||P.projectName;
+            const ti=document.getElementById('project-title');
+            if(ti) ti.textContent=P.projectName;
+            const ni=document.getElementById('project-name');
+            if(ni) ni.value=P.projectName;
+            document.title='OleaDev — '+P.projectName;
+          }
+          smShowAddressBanner(P.siteAddress,P.siteCoords);
+          autoSave();try{renderReport();}catch(e){}
+        }
+      }).catch(()=>{});
+  }catch(e){}
+
+  // Rebuild all downstream tabs
+  autoSave();
+  _pfCache=null;
+  try{rebuildAll();}catch(e){}
+
+  const instrEl=document.getElementById('sitemap-instructions');
+  if(instrEl) instrEl.innerHTML='Parcel imported from <span style="color:#AEBC46;font-weight:600">'+serviceName+'</span> · <span style="color:#AEBC46;font-weight:600">Draw buildings</span> or <span style="color:#AEBC46;font-weight:600">pick another parcel</span>';
+}
+
+// Fetch nearby comparables from multiple sources
+async function fetchNearbyComparables(lat,lng,address){
+  if(!lat||!lng){console.error('fetchNearbyComparables: no coords!',lat,lng);return;}
+  console.log('fetchNearbyComparables START: lat='+lat+' lng='+lng);
+  P.comparables=[];
+
+  // ── NAD27 MTM Zone 10 conversion helpers ──
+  // Use site coords as reference, fallback to GTA center for NAD27 approximation
+  const refLat=lat||43.70, refLng=lng||-79.38, refX=309107+(((lng||-79.38)-(-79.4490))/((1.0/(111000*Math.cos(43.7*Math.PI/180))))), refY=4839363+((lat||43.70)-43.6929)*111000;
+  const latPerY=1.0/111000, lngPerX=1.0/(111000*Math.cos(43.7*Math.PI/180));
+  const toNAD=([ln,la])=>[refX+(ln-refLng)/lngPerX, refY+(la-refLat)/latPerY];
+  const toLL=([x,y])=>[refLng+(x-refX)*lngPerX, refLat+(y-refY)*latPerY];
+
+  // Convert site coords to NAD27 for bounding box search
+  const [siteX,siteY]=toNAD([lng,lat]);
+  const radiusM=3000; // 3km search radius
+
+  // ── CORS proxies ──
+  const corsProxies=['','https://api.allorigins.win/raw?url=','https://corsproxy.io/?'];
+  const torontoAPI='https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search';
+  const resourceId='8907d8ed-c515-4ce9-b674-9f8c6eefcf0d';
+
+  // ── Helper: fetch one page of results from CKAN (text search + coord filter) ──
+  const haversineDist=(lat1,lng1,lat2,lng2)=>{
+    const dLat=(lat2-lat1)*Math.PI/180, dLng=(lng2-lng1)*Math.PI/180;
+    const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+    return 6371*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  };
+  const parseRecord=(r,existing)=>{
+    if(!r.X||!r.Y||!r.DESCRIPTION)return null;
+    const rLat=refLat+(parseFloat(r.Y)-refY)*latPerY;
+    const rLng=refLng+(parseFloat(r.X)-refX)*lngPerX;
+    const dist=haversineDist(lat,lng,rLat,rLng);
+    if(dist>3)return null; // within 3km only
+    const addr=((r.STREET_NUM||'')+' '+(r.STREET_NAME||'')+' '+(r.STREET_TYPE||'')+' '+(r.STREET_DIRECTION||'')).replace(/\s+/g,' ').trim();
+    const addrKey=addr.toLowerCase();
+    if(existing.has(addrKey))return null;
+    existing.add(addrKey);
+    const stMatch=(r.DESCRIPTION||'').match(/(\d+)[-\s]?stor/i);
+    const unitMatch=(r.DESCRIPTION||'').match(/([\d,]+)\s*(?:units|dwelling|residential)/i);
+    const storeys=stMatch?parseInt(stMatch[1]):0;
+    const units=unitMatch?parseInt(unitMatch[1].replace(/,/g,'')):0;
+    if(storeys<4&&units<10)return null; // skip small projects
+    let status=r.STATUS||'Under Review';
+    if(status==='Closed - Constructed'||status==='Complete')status='Built';
+    else if(status==='Closed - Not Constructed'||status==='Refused')status='Cancelled';
+    else if(status==='Closed')status='Built';
+    else if(status==='Final Approval Completed')status='Approved';
+    else if(status==='NOAC Issued')status='NOAC Issued';
+    else if(status==='OMB Appeal'||status==='OLT Appeal')status='OLT Appeal';
+    else if(status.startsWith('Under Review'))status='Under Review';
+    let dev='';
+    const embMatch=TORONTO_DEV_DB.find(e=>e.addr&&e.addr.toLowerCase()===addrKey);
+    if(embMatch){dev=embMatch.dev||'';if(embMatch.arch&&embMatch.arch!=='—')dev+=(dev?' / ':'')+embMatch.arch;}
+    return {addr,dev,storeys,units,fsi:'',status,dist:Math.round(dist*1000),desc:r.DESCRIPTION||''};
+  };
+
+  // ── Source 1: LIVE City of Toronto Open Data API (preferred) ──
+  // Uses datastore_search (text search) since datastore_search_sql is disabled on this CKAN instance.
+  // Strategy: Step 1 — determine the ward(s) from a proximity lookup.
+  //           Step 2 — fetch records filtered by ward + "storey" text, then spatially filter.
+  //           This is efficient because ward filtering narrows ~26k records to ~400-600 per ward.
+  let liveResults=[];
+  let apiSuccess=false;
+  const existing=new Set();
+
+  // Toronto 25-Ward adjacency map (2022 boundaries) — approximate neighbours within 3km reach
+  const WARD_NEIGHBOURS={
+    'Etobicoke North':['Etobicoke Centre','Humber River-Black Creek','York South-Weston'],
+    'Etobicoke Centre':['Etobicoke North','Etobicoke-Lakeshore','York South-Weston','Parkdale-High Park'],
+    'Etobicoke-Lakeshore':['Etobicoke Centre','Parkdale-High Park'],
+    'Parkdale-High Park':['Etobicoke Centre','Etobicoke-Lakeshore','Davenport','Spadina-Fort York'],
+    'York South-Weston':['Etobicoke North','Etobicoke Centre','Humber River-Black Creek','Davenport'],
+    'Humber River-Black Creek':['Etobicoke North','York South-Weston','York Centre','Eglinton-Lawrence'],
+    'York Centre':['Humber River-Black Creek','Eglinton-Lawrence','Willowdale'],
+    'Eglinton-Lawrence':['York Centre','Humber River-Black Creek','Davenport','Toronto-St. Paul\'s'],
+    'Davenport':['York South-Weston','Eglinton-Lawrence','Parkdale-High Park','Spadina-Fort York','University-Rosedale','Toronto-St. Paul\'s'],
+    'Spadina-Fort York':['Parkdale-High Park','Davenport','University-Rosedale','Toronto Centre'],
+    'University-Rosedale':['Davenport','Spadina-Fort York','Toronto Centre','Toronto-St. Paul\'s','Don Valley West'],
+    'Toronto-St. Paul\'s':['Eglinton-Lawrence','Davenport','University-Rosedale','Don Valley West'],
+    'Toronto Centre':['Spadina-Fort York','University-Rosedale','Toronto-Danforth','Don Valley West','Beaches-East York'],
+    'Toronto-Danforth':['Toronto Centre','Don Valley West','Beaches-East York','Don Valley East'],
+    'Don Valley West':['Toronto-St. Paul\'s','University-Rosedale','Toronto Centre','Toronto-Danforth','Don Valley North','Don Valley East'],
+    'Don Valley East':['Don Valley West','Don Valley North','Toronto-Danforth','Beaches-East York','Scarborough North','Scarborough Centre'],
+    'Don Valley North':['Willowdale','Don Valley West','Don Valley East','Scarborough North'],
+    'Willowdale':['York Centre','Don Valley North','Scarborough North'],
+    'Beaches-East York':['Toronto Centre','Toronto-Danforth','Don Valley East','Scarborough Southwest'],
+    'Scarborough Southwest':['Beaches-East York','Don Valley East','Scarborough Centre','Scarborough-Guildwood'],
+    'Scarborough Centre':['Don Valley East','Scarborough North','Scarborough Southwest','Scarborough-Guildwood','Scarborough-Agincourt','Scarborough-Rouge Park'],
+    'Scarborough North':['Don Valley North','Don Valley East','Scarborough Centre','Scarborough-Agincourt','Willowdale'],
+    'Scarborough-Agincourt':['Scarborough North','Scarborough Centre','Scarborough-Rouge Park'],
+    'Scarborough-Guildwood':['Scarborough Southwest','Scarborough Centre','Scarborough-Rouge Park'],
+    'Scarborough-Rouge Park':['Scarborough-Agincourt','Scarborough Centre','Scarborough-Guildwood']
+  };
+
+  // Helper: fetch a page from CKAN via CORS proxy
+  const ckanFetch=async(proxy,params)=>{
+    const rawUrl=torontoAPI+'?'+params.toString();
+    const url=proxy?proxy+encodeURIComponent(rawUrl):rawUrl;
+    const resp=await fetch(url,{signal:AbortSignal.timeout(12000)});
+    if(!resp.ok)return null;
+    const data=await resp.json();
+    return (data.result?data.result:{records:[],total:0});
+  };
+
+  for(const proxy of corsProxies){
+    try{
+      // Step 1: Determine ward from coordinates using Toronto 25-ward centroid lookup
+      // Primary method: coordinate-based (reliable, no API call needed)
+      // Each entry: [wardName, centroidLat, centroidLng]
+      const WARD_CENTROIDS=[
+        ['Etobicoke North',43.738,-79.566],['Etobicoke Centre',43.693,-79.537],
+        ['Etobicoke-Lakeshore',43.625,-79.510],['Parkdale-High Park',43.646,-79.462],
+        ['York South-Weston',43.690,-79.487],['Humber River-Black Creek',43.732,-79.492],
+        ['York Centre',43.752,-79.439],['Eglinton-Lawrence',43.714,-79.415],
+        ['Davenport',43.672,-79.433],['Spadina-Fort York',43.638,-79.397],
+        ['University-Rosedale',43.670,-79.390],['Toronto-St. Paul\'s',43.697,-79.389],
+        ['Toronto Centre',43.652,-79.367],['Toronto-Danforth',43.668,-79.340],
+        ['Don Valley West',43.700,-79.355],['Don Valley East',43.720,-79.325],
+        ['Don Valley North',43.770,-79.345],['Willowdale',43.775,-79.400],
+        ['Beaches-East York',43.679,-79.298],['Scarborough Southwest',43.695,-79.260],
+        ['Scarborough Centre',43.765,-79.248],['Scarborough North',43.795,-79.290],
+        ['Scarborough-Agincourt',43.800,-79.270],['Scarborough-Guildwood',43.738,-79.195],
+        ['Scarborough-Rouge Park',43.790,-79.195]
+      ];
+      let siteWard='',bestWardDist=Infinity;
+      WARD_CENTROIDS.forEach(([name,wLat,wLng])=>{
+        const d=haversineDist(lat,lng,wLat,wLng);
+        if(d<bestWardDist){bestWardDist=d;siteWard=name;}
+      });
+      console.log('Detected ward:',siteWard,'('+bestWardDist.toFixed(1)+'km from centroid)');
+
+      // Step 2: Build list of wards to search (site ward + neighbours)
+      const wardsToSearch=[siteWard,...(WARD_NEIGHBOURS[siteWard]||[])];
+      // Deduplicate
+      const wardSet=new Set(wardsToSearch);
+      let totalFetched=0;
+
+      // Step 3: For each ward, fetch storey-related records and spatially filter
+      for(const ward of wardSet){
+        for(let offset=0;offset<500;offset+=100){
+          const params=new URLSearchParams({
+            resource_id:resourceId,limit:'100',offset:String(offset),
+            q:'storey',filters:JSON.stringify({WARD_NAME:ward})
+          });
+          const result=await ckanFetch(proxy,params);
+          if(!result||!result.records||result.records.length===0)break;
+          totalFetched+=result.records.length;
+
+          result.records.forEach(r=>{
+            // Quick NAD27 bounding box pre-filter
+            const rx=parseFloat(r.X||0),ry=parseFloat(r.Y||0);
+            if(rx<siteX-radiusM||rx>siteX+radiusM||ry<siteY-radiusM||ry>siteY+radiusM)return;
+            const parsed=parseRecord(r,existing);
+            if(parsed)liveResults.push(parsed);
+          });
+
+          if(result.records.length<100)break;
+        }
+      }
+
+      if(totalFetched>0){
+        liveResults.sort((a,b)=>a.dist-b.dist);
+        liveResults=liveResults.slice(0,15);
+        apiSuccess=true;
+        console.log('Toronto API: '+totalFetched+' records from '+wardSet.size+' wards → '+liveResults.length+' significant developments within 3km');
+        break; // proxy worked
+      }
+    }catch(e){
+      console.warn('CORS proxy failed:',proxy,e.message);
+      continue;
+    }
+  }
+
+  if(apiSuccess&&liveResults.length>0){
+    // Use live data as primary source
+    liveResults.forEach(r=>{
+      P.comparables.push({
+        addr:r.addr, dev:r.dev, storeys:r.storeys, units:r.units,
+        fsi:r.fsi, status:r.status
+      });
+    });
+
+    // Supplement with embedded DB entries not in live results (dev name + architect enrichment)
+    const liveAddrs=new Set(P.comparables.map(c=>(c.addr||'').toLowerCase()));
+    const embedded=findNearbyComparables(lat,lng,3,10);
+    embedded.forEach(c=>{
+      const addrKey=(c.addr||'').toLowerCase();
+      if(liveAddrs.has(addrKey)){
+        // Enrich live entry with embedded dev/arch data
+        const liveEntry=P.comparables.find(p=>(p.addr||'').toLowerCase()===addrKey);
+        if(liveEntry&&!liveEntry.dev&&c.dev)liveEntry.dev=c.dev;
+      } else {
+        // Add embedded entry not in live API (may be older/completed project)
+        P.comparables.push({
+          addr:c.addr, dev:c.dev||'', storeys:c.storeys||0, units:c.units||0,
+          fsi:c.gfaM2?((c.gfaM2*10.7639/Math.max(1,lotArea())).toFixed(1)+'×'):'',
+          status:c.st||'Under Review'
+        });
+      }
+    });
+  } else {
+    // API failed — fall back to embedded database
+    console.warn('Live API unavailable, using embedded database');
+    const embedded=findNearbyComparables(lat,lng,3,12);
+    embedded.forEach(c=>{
+      P.comparables.push({
+        addr:c.addr, dev:c.dev||'', storeys:c.storeys||0, units:c.units||0,
+        fsi:c.gfaM2?((c.gfaM2*10.7639/Math.max(1,lotArea())).toFixed(1)+'×'):'',
+        status:c.st||'Under Review'
+      });
+    });
+  }
+
+  // If still no comparables, try broader search
+  if(P.comparables.length===0){
+    const broader=findNearbyComparables(lat,lng,5,15);
+    broader.forEach(c=>{
+      P.comparables.push({
+        addr:c.addr, dev:c.dev||'', storeys:c.storeys||0, units:c.units||0,
+        fsi:'', status:c.st||'Under Review'
+      });
+    });
+  }
+
+  autoSave();
+  try{renderReport();}catch(e){console.warn('renderReport error:',e);}
+  console.log('Comparables search complete:',P.comparables.length,'entries'+(apiSuccess?' (LIVE DATA)':' (EMBEDDED FALLBACK)'));
+  try{smUpdateCompCount();}catch(e){}
+  try{
+    const compBadge=document.getElementById('sm-address-banner');
+    if(compBadge&&P.comparables.length>0){
+      compBadge.innerHTML+='<div style="margin-top:6px;color:#AEBC46;font-size:11px;font-weight:600">✓ '+P.comparables.length+' comparable developments'+(apiSuccess?' (live data)':' (cached)')+'</div>';
+    }
+  }catch(e){}
+  if(P.comparables.length===0){
+    console.warn('NO COMPARABLES FOUND. lat='+lat+' lng='+lng);
+  }
+}
+
+// ── Toast notification (independent of address banner) ──
+function smShowToast(msg,color){
+  color=color||'#AEBC46';
+  let toast=document.getElementById('sm-toast');
+  if(!toast){
+    toast=document.createElement('div');
+    toast.id='sm-toast';
+    toast.style.cssText='position:fixed;bottom:24px;right:24px;z-index:99999;background:#1a1a1a;border:2px solid '+color+';border-radius:8px;padding:12px 20px;font-family:Outfit,DM Sans,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.6);max-width:400px;transition:opacity 0.3s;font-size:12px;color:#eee';
+    document.body.appendChild(toast);
+  }
+  toast.style.borderColor=color;
+  toast.style.display='block';
+  toast.style.opacity='1';
+  toast.innerHTML='<span style="color:'+color+';font-weight:700;margin-right:6px">●</span> '+msg;
+  clearTimeout(toast._timer);
+  toast._timer=setTimeout(()=>{toast.style.opacity='0';setTimeout(()=>{toast.style.display='none';},400);},5000);
+}
+
+// ── Update comparables count on Site Map panel ──
+function smUpdateCompCount(){
+  let el=document.getElementById('sm-comp-count');
+  if(!el){
+    const lotInfo=document.getElementById('sitemap-lot-info');
+    if(!lotInfo)return;
+    el=document.createElement('div');
+    el.id='sm-comp-count';
+    el.style.cssText='margin-top:8px;padding:8px 10px;background:#1a2a1a;border:1px solid #AEBC46;border-radius:6px;font-size:11px';
+    lotInfo.appendChild(el);
+  }
+  const n=(P.comparables||[]).length;
+  if(n>0){
+    el.style.display='block';
+    el.innerHTML='<span style="color:#AEBC46;font-weight:700">📊 '+n+' Comparable'+(n!==1?'s':'')+' Found</span><br><span style="color:#888;font-size:10px">View in REPORT tab · Auto-saved</span>';
+  } else {
+    el.style.display='block';
+    el.innerHTML='<span style="color:#888">No comparables found nearby</span>';
+  }
+}
+
+// Show detected address banner on the map
+function smShowAddressBanner(address, coords){
+  let banner=document.getElementById('sm-address-banner');
+  if(!banner){
+    banner=document.createElement('div');
+    banner.id='sm-address-banner';
+    banner.style.cssText='position:absolute;top:50px;left:10px;right:10px;z-index:100;background:#1a1a1a;border:2px solid #AEBC46;border-radius:8px;padding:12px 16px;font-family:Outfit,DM Sans,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
+    const mapWrap=document.getElementById('sitemap-map');
+    if(mapWrap) mapWrap.parentNode.style.position='relative';
+    (mapWrap?mapWrap.parentNode:document.body).appendChild(banner);
+  }
+  banner.style.display='block';
+  banner.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="color:#AEBC46;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:4px">📍 SITE LOCATION DETECTED</div>
+        <div style="color:#eee;font-size:13px;font-weight:600">${address}</div>
+        <div style="color:#888;font-size:10px;margin-top:2px">Lat: ${coords.lat.toFixed(5)} · Lng: ${coords.lng.toFixed(5)}</div>
+        <div style="color:#4ecdc4;font-size:10px;margin-top:4px">✓ Coordinates locked — comparables will search near this location</div>
+      </div>
+      <button onclick="document.getElementById('sm-address-banner').style.display='none'" style="background:none;border:1px solid #555;color:#888;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:10px;flex-shrink:0;margin-left:12px">✕ Dismiss</button>
+    </div>
+  `;
+  // Auto-dismiss after 8 seconds
+  setTimeout(()=>{if(banner)banner.style.display='none';},8000);
+}
+
+// Auto-sync map volumes → 3D massing + pro-forma + report (debounced)
+let _smSyncTimer=null;
+function smAutoSync(){
+  smUpdateVolStats();
+  clearTimeout(_smSyncTimer);
+  _smSyncTimer=setTimeout(()=>{
+    if(!smLotData)return;
+    // Sync lot polygon
+    const verts=smLotData.vertices;
+    let originIdx=0;
+    verts.forEach((v,i)=>{ if(v[1]>verts[originIdx][1]) originIdx=i; });
+    const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
+    const polyVerts=verts.map(v=>{
+      const xM=turf.distance(turf.point([originLng,originLat]),turf.point([v[0],originLat]),{units:'meters'});
+      const xFt=xM*3.28084*(v[0]>originLng?1:-1);
+      const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,v[1]]),{units:'meters'});
+      const zFt=zM*3.28084*(v[1]<originLat?1:-1);
+      return [Math.round(xFt), Math.round(zFt)];
+    });
+    let crossSum=0;
+    for(let i=0

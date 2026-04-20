@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>OleaDev — Massing Builder</title>
+<!-- ── External libraries ──
+     For production deployments, generate SHA-384 SRI hashes for each CDN script
+     and add integrity="sha384-..." to lock the version (prevents CDN tampering).
+     Compute via: shasum -b -a 384 file | xxd -r -p | base64
+     The crossorigin="anonymous" attribute is required for SRI to work. -->
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js" crossorigin="anonymous"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" crossorigin="anonymous">
+<script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js" crossorigin="anonymous"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" crossorigin="anonymous">
+<script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.2/mapbox-gl-geocoder.min.js" crossorigin="anonymous"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.2/mapbox-gl-geocoder.css" rel="stylesheet" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="css/estatebuilder.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<!-- ════════ EARLY-LOAD: Bulletproof Clear Lot function ════════
+     Defined in HEAD-equivalent position so it's available before any button click.
+     This is a totally self-contained function that doesn't depend on any JS file. -->
+<script>
+window.__clearLotAndReload = function(){
+  try {
+    if(!confirm('Clear the lot and all buildings? This cannot be undone.')) return;
+    // 1. Wipe ALL localStorage keys related to current session lot/buildings
+    //    (saved projects under 'oleadev-massing-projects' are PRESERVED)
+    try { localStorage.removeItem('oleadev-massing-autosave'); } catch(e) {}
+    // 2. Visual feedback so user knows click was received
+    try {
+      var btn = document.getElementById('btn-clear-lot');
+      if(btn){ btn.disabled = true; btn.textContent = 'Clearing...'; btn.style.opacity = '0.6'; }
+    } catch(e) {}
+    // 3. Reload the page — guaranteed clean slate
+    setTimeout(function(){
+      try { window.location.reload(); }
+      catch(e){ window.location.href = window.location.pathname + '?cleared=' + Date.now(); }
+    }, 50);
+  } catch(err) {
+    alert('Clear failed: ' + (err && err.message || 'unknown error') + '\nPlease refresh the page manually.');
+  }
+};
+</script>
+
+<!-- ════════ SIDE PANEL ════════ -->
+<div id="panel">
+  <div id="panel-resize"></div>
+  <div id="panel-inner">
+    <div class="brand">OLEADEV <span id="eb-ver" style="font-size:8px;color:#AEBC46;opacity:0.6;margin-left:6px">v4.0-ENGINE</span></div>
+    <h1 id="project-title" contenteditable="true" spellcheck="false" style="cursor:text;outline:none;border-bottom:1px dashed transparent" onfocus="this.style.borderBottomColor='#AEBC46'" onblur="this.style.borderBottomColor='transparent';P.projectName=this.textContent.trim();document.title='OleaDev — '+P.projectName;autoSave();">Untitled Project</h1>
+
+    <!-- DEVELOPMENT TYPE SELECTOR -->
+    <div style="margin:8px 0 12px;padding:8px 10px;background:#1a1a1a;border:1px solid #333;border-radius:6px;display:flex;align-items:center;gap:10px">
+      <label style="font-size:9px;color:#AEBC46;font-weight:700;letter-spacing:1.5px;white-space:nowrap">ASSET CLASS</label>
+      <select id="project-type-select" class="project-select" style="flex:1;margin:0">
+        <option value="midrise">Mixed-Use Mid-Rise (5-12 storeys)</option>
+        <option value="highrise">Mixed-Use High-Rise (13+ storeys)</option>
+      </select>
+    </div>
+
+    <!-- PRIMARY NAV — workflow groups -->
+    <div class="nav-primary">
+      <button class="nav-group active" data-group="site" onclick="switchGroup('site')">SITE</button>
+      <button class="nav-group" data-group="financials" onclick="switchGroup('financials')">FINANCIALS</button>
+      <button class="nav-group" data-group="output" onclick="switchGroup('output')">OUTPUT</button>
+    </div>
+    <!-- SECONDARY NAV — sub-tabs within active group -->
+    <div class="nav-secondary" id="nav-secondary">
+      <button class="tab-btn active" data-tab="sitemap" data-group="site" onclick="switchTab('sitemap')">SITE MAP</button>
+      <button class="tab-btn" data-tab="massing" data-group="site" onclick="switchTab('massing')">MASSING</button>
+      <button class="tab-btn" data-tab="section" data-group="site" onclick="switchTab('section')">SECTION</button>
+      <button class="tab-btn" data-tab="proforma" data-group="financials" onclick="switchTab('proforma')" style="display:none">PRO-FORMA</button>
+      <button class="tab-btn" data-tab="units" data-group="financials" onclick="switchTab('units')" style="display:none">UNITS</button>
+      <button class="tab-btn" data-tab="scenarios" data-group="financials" onclick="switchTab('scenarios')" style="display:none">SCENARIOS</button>
+      <button class="tab-btn" data-tab="report" data-group="output" onclick="switchTab('report')" style="display:none">REPORT</button>
+      <button class="tab-btn" data-tab="zoning" data-group="output" onclick="switchTab('zoning')" style="display:none">ZONING</button>
+      <button class="tab-btn" data-tab="ai" data-group="output" onclick="switchTab('ai')" style="display:none">AI</button>
+    </div>
+
+    <!-- ═══ TAB: SITE MAP ═══ -->
+    <div id="tab-sitemap" class="tab-content active">
+      <div id="sitemap-token" style="margin-bottom:12px">
+        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter your <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:#AEBC46">Mapbox token</a> (free) to load satellite map:</div>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="mapbox-token" placeholder="pk.eyJ1Ij..." style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:8px 10px;border-radius:4px;font-size:12px;font-family:inherit">
+          <button class="btn-add" style="width:auto;padding:8px 16px" onclick="initSiteMap()">LOAD MAP</button>
+        </div>
+      </div>
+      <div id="sitemap-controls" style="display:none">
+
+        <!-- ═══ SECTION: LOT DEFINITION ═══ -->
+        <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
+          <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#888;margin-bottom:8px">LOT DEFINITION</div>
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <button class="btn-add" onclick="sitemapDraw()" style="flex:1;font-size:11px;padding:8px 10px">✏️ DRAW LOT</button>
+            <button class="btn-add" id="btn-pick-parcel" onclick="smToggleParcelPicker()" style="flex:1;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">🏠 PICK PARCEL</button>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-add" id="btn-edit-lot" onclick="smToggleEditLot()" style="flex:1;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">📌 EDIT LOT</button>
+            <!-- Bulletproof clear: minimal inline JS that always works -->
+            <button class="btn-del" id="btn-clear-lot" onclick="window.__clearLotAndReload()" style="flex:1;font-size:11px;padding:8px 10px;display:none">✕ CLEAR LOT</button>
+          </div>
+        </div>
+
+        <!-- ═══ MULTI-PARCEL SELECTION BAR (hidden until active) ═══ -->
+        <div id="sm-multi-parcel-bar" style="display:none;background:linear-gradient(135deg,#1a2a10,#1a1a1a);border:1.5px solid #AEBC46;border-radius:8px;padding:10px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:14px">📦</span>
+              <div>
+                <div style="font-size:11px;font-weight:700;color:#AEBC46;letter-spacing:0.5px">MULTI-PARCEL SELECT</div>
+                <div id="sm-multi-parcel-count" style="font-size:9px;color:#888;margin-top:1px">Click parcels to add them</div>
+              </div>
+            </div>
+            <div id="sm-parcel-badge" style="background:#AEBC46;color:#111;font-size:12px;font-weight:800;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center">0</div>
+          </div>
+          <div id="sm-selected-parcels-list" style="max-height:120px;overflow-y:auto;margin-bottom:8px"></div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-add" onclick="smMergeAndApplyParcels()" id="btn-merge-parcels" style="flex:1;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none">🔗 MERGE & APPLY</button>
+            <button class="btn-add" onclick="smUndoLastParcel()" id="btn-undo-parcel" style="flex:0 0 auto;background:#444;color:#AEBC46;font-size:11px;padding:8px 12px;opacity:0.4;pointer-events:none">↩ UNDO</button>
+            <button class="btn-add" onclick="smCancelMultiParcel()" style="flex:0 0 auto;background:#c44;color:#fff;font-size:11px;padding:8px 12px">✕</button>
+          </div>
+        </div>
+
+        <!-- ═══ SECTION: MAP CONTROLS ═══ -->
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button class="btn-add" onclick="sitemapToggleStyle()" style="flex:1;background:#2a2a2a;color:#ccc;font-size:10px;padding:7px 10px;border:1px solid #333">🗺️ LAYER</button>
+          <button class="btn-add" onclick="sitemapToggle3D()" style="flex:1;background:#2a2a2a;color:#ccc;font-size:10px;padding:7px 10px;border:1px solid #333">🏔️ 3D</button>
+          <div id="zoning-toggle-row" onclick="toggleZoningOverlay()" style="flex:1.5;display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:#2a2a2a;border:1px solid #333;border-radius:4px;cursor:pointer;transition:all .2s;user-select:none">
+            <div style="display:flex;align-items:center;gap:4px">
+              <span style="font-size:11px">📋</span>
+              <div id="zoning-toggle-label" style="font-size:10px;font-weight:600;color:#ccc;letter-spacing:0.3px">ZONING</div>
+            </div>
+            <div id="zoning-toggle-switch" style="width:28px;height:14px;border-radius:7px;background:#333;position:relative;transition:background .2s;flex-shrink:0">
+              <div id="zoning-toggle-knob" style="width:10px;height:10px;border-radius:50%;background:#666;position:absolute;top:2px;left:2px;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>
+            </div>
+          </div>
+        </div>
+        <div id="zoning-info" style="display:none;margin-bottom:10px;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;font-size:10px"></div>
+
+        <!-- ═══ SECTION: LOT ANALYSIS (shown after lot is drawn/picked) ═══ -->
+        <div id="sitemap-lot-info" style="display:none">
+          <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
+            <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">LOT ANALYSIS</div>
+            <div id="sitemap-metrics"></div>
+            <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#888;margin:10px 0 6px;padding-bottom:4px;border-bottom:1px solid #333333">EDGE DIMENSIONS</div>
+            <div id="sitemap-edges"></div>
+          </div>
+
+          <!-- ═══ ZONING & AI ═══ -->
+          <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
+            <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">ZONING ESTIMATES</div>
+            <div id="sitemap-zoning"></div>
+            <div style="margin-top:10px">
+              <button class="sec3d-btn" onclick="requestAI('zoning-analysis')" style="width:100%;padding:7px 12px;font-size:10px">🔍 AI ZONING ANALYSIS</button>
+            </div>
+            <div id="ai-inline-zoning-result" style="margin-top:8px"></div>
+          </div>
+
+          <!-- ═══ LOT ACTIONS ═══ -->
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <button class="btn-add" onclick="sitemapApplyToMassing()" style="flex:1;font-size:11px;padding:8px 10px">⬇️ APPLY TO MASSING</button>
+          </div>
+          <button class="btn-add" onclick="generateOptimalMassing()" id="btn-optimal-massing" style="background:linear-gradient(135deg,#AEBC46,#8a9a30);color:#111;font-size:12px;padding:10px;margin-bottom:10px;font-weight:700;letter-spacing:1px;display:none;width:100%;border:none;border-radius:4px;cursor:pointer">⚡ GENERATE OPTIMAL MASSING</button>
+          <div id="optimal-massing-info" style="display:none;margin-top:-4px;margin-bottom:10px;font-size:10px;color:#888;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px;max-height:70vh;overflow-y:auto"></div>
+          <div style="display:flex;gap:6px;margin-bottom:10px">
+            <button class="btn-add" onclick="sitemapExport()" style="flex:1;background:#2a2a2a;color:#ccc;border:1px solid #333;font-size:10px;padding:7px 10px">📤 EXPORT</button>
+            <button class="btn-add" onclick="sitemapCopy()" style="flex:1;background:#2a2a2a;color:#ccc;border:1px solid #333;font-size:10px;padding:7px 10px">📋 COPY DIMS</button>
+          </div>
+
+          <!-- ═══ BUILDING VOLUMES ═══ -->
+          <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
+            <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">BUILDING VOLUMES</div>
+            <div id="sitemap-vol-list"></div>
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <button class="btn-add" onclick="smDrawBuilding()" id="btn-draw-bldg" style="flex:1;font-size:11px;padding:8px 10px">✏️ DRAW POLYGON</button>
+              <div style="flex:1;position:relative" id="shape-builder-wrap">
+                <button class="btn-add" onclick="smToggleShapeMenu()" id="btn-shape-builder" style="width:100%;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">+ SHAPE ▾</button>
+                <div id="sm-shape-menu" style="display:none;position:absolute;bottom:100%;left:0;right:0;margin-bottom:4px;background:#1a1a1a;border:1.5px solid #AEBC46;border-radius:6px;padding:6px;z-index:200;box-shadow:0 -4px 20px rgba(0,0,0,0.6)">
+                </div>
+              </div>
+            </div>
+            <div id="sm-add-phase-wrap" style="display:none;margin-top:6px">
+              <button class="btn-add" onclick="smAddPhase()" style="width:100%;background:#2a3a2a;color:#AEBC46;border:1px solid #AEBC4644;font-size:11px;padding:8px 10px;font-weight:700">+ ADD PHASE</button>
+            </div>
+            <div id="sm-draw-hint" style="display:none;font-size:10px;color:#AEBC46;background:#AEBC4615;border:1px solid #AEBC4633;border-radius:4px;padding:6px 8px;margin-top:6px;text-align:center">
+              <b>Click</b> on the map to place vertices · <b>Double-click</b> to close the building footprint
+            </div>
+            <div id="sitemap-vol-stats" style="margin-top:10px;font-size:11px;color:#888"></div>
+          </div>
+
+          <!-- ═══ QUICK ACTIONS ═══ -->
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <button class="btn-add" onclick="smSyncTo3D()" style="flex:1;font-size:11px;padding:8px 10px">🔄 SYNC TO 3D PREVIEW</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: MASSING ═══ -->
+    <div id="tab-massing" class="tab-content">
+
+    <!-- ─── SITE ─── -->
+    <div class="sec-group">SITE</div>
+
+    <div class="sec" id="sec-lot">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-lot')">LOT DIMENSIONS <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-lot-bd"></div>
+    </div>
+
+    <div class="sec" id="sec-roads">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-roads')">ROAD FRONTAGES <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-roads-bd"></div>
+    </div>
+
+    <div class="sec" id="sec-set">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-set')">SETBACKS <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-set-bd"></div>
+    </div>
+
+    <div class="sec" id="sec-landscape">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-landscape')">LANDSCAPE <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-landscape-bd"></div>
+    </div>
+
+    <!-- ─── BUILDING ─── -->
+    <div class="sec-group">BUILDING</div>
+
+    <div class="sec" id="sec-vol">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-vol')">BUILDING VOLUMES <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-vol-bd">
+        <div id="vol-list"></div>
+        <button class="btn-add" onclick="addVolume()">+ Add Volume</button>
+      </div>
+    </div>
+
+    <div class="sec" id="sec-flr">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-flr')">FLOOR HEIGHTS <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-flr-bd"></div>
+    </div>
+
+    <div class="sec" id="sec-section">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-section')">BUILDING SECTION <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-section-bd">
+        <canvas id="section-canvas" width="380" height="320"></canvas>
+      </div>
+    </div>
+
+    <!-- ─── ANALYSIS ─── -->
+    <div class="sec-group">ANALYSIS</div>
+
+    <div class="sec" id="sec-stats">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-stats')">PROJECT STATS <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-stats-bd">
+        <div class="stat-grid" id="stats-grid"></div>
+      </div>
+    </div>
+
+    <div class="sec" id="sec-units">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-units')">BUILDING SUMMARY <span class="arrow">▼</span></div>
+      <div class="sec-bd hidden" id="sec-units-bd"></div>
+    </div>
+
+    <!-- ─── PROJECT ─── -->
+    <div class="sec-group">PROJECT</div>
+
+    <div class="sec" id="sec-save">
+      <div class="sec-hd collapsed" onclick="toggleSec('sec-save')">SAVE / LOAD PROJECT <span class="arrow">▼</span></div>
+      <div class="sec-bd" id="sec-save-bd">
+        <select id="project-select" class="project-select" onchange="onProjectSelect()">
+          <option value="">— Select saved project —</option>
+        </select>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <input id="project-name" type="text" placeholder="Project name..."
+            style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:5px 8px;border-radius:4px;font-size:12px">
+        </div>
+        <div class="save-bar">
+          <button class="primary" onclick="saveProject()">💾 Save</button>
+          <button onclick="loadProject()">📂 Load</button>
+          <button onclick="exportProject()">📤 Export JSON</button>
+          <button onclick="importProject()">📥 Import JSON</button>
+        </div>
+        <div class="save-bar" style="margin-top:4px">
+          <button class="danger" onclick="deleteProject()">🗑 Delete</button>
+          <button onclick="resetToDefaults()">↩ Reset Defaults</button>
+        </div>
+        <div id="save-status" class="save-status"></div>
+        <div style="font-size:10px;color:#777;margin-top:6px">
+          Auto-saves on every change. Projects persist in browser storage.
+        </div>
+      </div>
+    </div>
+
+    </div><!-- end tab-massing -->
+
+    <!-- ═══ TAB: SECTION (3D cross-section) ═══ -->
+    <div id="tab-section" class="tab-content">
+      <div style="margin-bottom:8px">
+        <span style="font-size:13px;font-weight:700;color:#AEBC46">BUILDING SECTION — 3D FLOOR PLATE</span>
+        <span class="pf-live-badge">LIVE</span>
+        <div style="font-size:10px;color:#777;margin-top:4px">Orbit, zoom, and pan to inspect from any angle. Color-coded by use.</div>
+      </div>
+      <div id="section3d-wrap" style="width:100%;height:calc(100vh - 180px);min-height:500px;background:#1A1A1A;border-radius:6px;overflow:hidden;position:relative;border:1px solid #333333">
+        <canvas id="section3d-canvas" style="display:block;cursor:grab"></canvas>
+        <div id="section3d-legend" style="position:absolute;bottom:8px;left:8px;display:flex;gap:10px;font-size:10px;background:rgba(26,26,26,.85);padding:6px 10px;border-radius:4px">
+          <span><span style="display:inline-block;width:10px;height:10px;background:#e8c87a;border-radius:2px;vertical-align:middle"></span> Commercial</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:#4ecdc4;border-radius:2px;vertical-align:middle"></span> Amenity</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:#88aabb;border-radius:2px;vertical-align:middle"></span> Residential</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:#c49ade;border-radius:2px;vertical-align:middle"></span> Elevator</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:#b06050;border-radius:2px;vertical-align:middle"></span> Stairwell</span>
+        </div>
+        <div style="position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px">
+          <button class="sec3d-btn" onclick="sec3dView('front')">NORTH</button>
+          <button class="sec3d-btn" onclick="sec3dView('back')">SOUTH</button>
+          <button class="sec3d-btn" onclick="sec3dView('side')">EAST</button>
+          <button class="sec3d-btn" onclick="sec3dView('west')">WEST</button>
+          <button class="sec3d-btn" onclick="sec3dView('top')">TOP</button>
+          <button class="sec3d-btn" onclick="sec3dView('persp')">3D</button>
+        </div>
+        <div style="position:absolute;bottom:50px;left:8px;font-size:10px;color:#777;background:rgba(26,26,26,.8);padding:6px 10px;border-radius:4px;line-height:1.6">
+          Left-drag: orbit · Right-drag: pan · Scroll: zoom<br>
+          <span style="color:#AEBC46">Drag</span> stairs/elevators to move · <span style="color:#AEBC46">Click</span> to select, then <span style="color:#AEBC46">← → arrow keys</span> to rotate
+        </div>
+      </div>
+      <div id="section3d-stats" style="margin-top:10px"></div>
+      <!-- Core Placement Controls -->
+      <div style="margin-top:12px;background:#1A1A1A;border:1px solid #333333;border-radius:6px;padding:10px">
+        <div style="font-size:12px;font-weight:700;color:#AEBC46;margin-bottom:8px;letter-spacing:1px">CORE PLACEMENT <span style="font-size:9px;color:#777;font-weight:400">(positions in feet from NW corner)</span></div>
+        <div id="core-controls"></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: PRO-FORMA ═══ -->
+    <div id="tab-proforma" class="tab-content">
+      <div style="margin-bottom:10px">
+        <span style="font-size:13px;font-weight:700;color:#AEBC46">DEVELOPMENT PRO-FORMA</span>
+        <span class="pf-live-badge">LIVE</span>
+        <div style="font-size:10px;color:#777;margin-top:4px">All values update in real-time from the massing model</div>
+      </div>
+      <div id="pf-kpis" class="pf-kpi"></div>
+      <div id="pf-benchmark-banner"></div>
+      <div id="pf-sources-uses"></div>
+      <div id="pf-costs"></div>
+      <div id="pf-revenue"></div>
+      <div id="pf-returns"></div>
+      <div id="pf-sensitivity"></div>
+      <div id="pf-waterfall"></div>
+      <div id="pf-dcf-section" style="margin-top:16px">
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+          <span style="font-size:13px;font-weight:700;color:#AEBC46">CASH FLOW / DCF MODEL</span>
+          <span class="pf-live-badge">LIVE</span>
+        </div>
+        <div id="pf-dcf-inputs"></div>
+        <div id="pf-gantt" style="margin-top:12px"></div>
+        <div id="pf-cashflow-chart" style="margin-top:12px"></div>
+        <div id="pf-dcf-summary" style="margin-top:12px"></div>
+      </div>
+      <div id="pf-montecarlo"></div>
+      <!-- AI Inline Buttons for Pro-Forma -->
+      <div style="margin-top:16px;padding:12px;border:1px dashed #AEBC46;border-radius:6px;background:#1a2a1a">
+        <div style="font-size:10px;font-weight:700;color:#AEBC46;letter-spacing:1px;margin-bottom:8px">AI ANALYSIS</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="sec3d-btn" onclick="requestAI('proforma-optimize')" style="flex:1;min-width:140px;padding:6px 12px">📊 Optimize Pro-Forma</button>
+          <button class="sec3d-btn" onclick="requestAI('risk-assessment')" style="flex:1;min-width:140px;padding:6px 12px">⚠️ Risk Assessment</button>
+        </div>
+        <div id="ai-inline-pf-result" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: UNITS ═══ -->
+    <div id="tab-units" class="tab-content">
+      <div style="margin-bottom:10px">
+        <span style="font-size:13px;font-weight:700;color:#AEBC46">UNIT MIX EDITOR</span>
+        <span class="pf-live-badge">LIVE</span>
+        <div style="font-size:10px;color:#777;margin-top:4px">Floor-by-floor unit schedule linked to massing and pro-forma</div>
+      </div>
+      <div id="unit-editor-content"></div>
+    </div>
+
+    <!-- ═══ TAB: REPORT ═══ -->
+
+    <!-- ═══ TAB: ZONING COMPLIANCE ═══ -->
+    <div id="tab-zoning" class="tab-content">
+      <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:#4ecdc4">ZONING COMPLIANCE DASHBOARD</span>
+          <span class="pf-live-badge" style="background:#0a3530;color:#4ecdc4;border-color:#4ecdc4">LIVE</span>
+          <div style="font-size:10px;color:#777;margin-top:4px">Real-time compliance against detected zoning — By-law 569-2013 and overlays</div>
+        </div>
+        <button onclick="renderZoningDashboard()" class="sec3d-btn" style="border-color:#4ecdc4;color:#4ecdc4;padding:5px 12px;font-size:10px">↻ REFRESH</button>
+      </div>
+      <div id="zoning-dashboard-content" style="font-size:11px;color:#ccc">
+        <div style="text-align:center;padding:30px;color:#666">Draw a lot on the Site Map to detect zoning and activate compliance analysis.</div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: FINANCIAL SCENARIOS ═══ -->
+    <div id="tab-scenarios" class="tab-content">
+      <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:#FF9933">FINANCIAL SCENARIO MODELLING</span>
+          <span class="pf-live-badge" style="background:rgba(255,153,51,0.15);color:#FF9933;border:1px solid #FF993330">SCENARIO</span>
+          <div style="font-size:10px;color:#777;margin-top:4px">Best / Base / Stress scenario comparison with sensitivity analysis</div>
+        </div>
+        <button onclick="renderScenarioDashboard()" class="sec3d-btn" style="border-color:#FF993340;color:#FF9933;background:rgba(255,153,51,0.06);padding:5px 12px;font-size:10px">↻ RECALCULATE</button>
+      </div>
+      <div id="scenario-dashboard-content" style="font-size:11px;color:#ccc">
+        <div style="text-align:center;padding:30px;color:#666">Configure volumes and pro-forma inputs, then switch to this tab to see scenario comparison.</div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: AI INSIGHTS ═══ -->
+    <div id="tab-ai" class="tab-content">
+      <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:#AEBC46">AI INSIGHTS</span>
+          <span class="pf-live-badge">POWERED BY AI</span>
+          <div style="font-size:10px;color:#777;margin-top:4px">AI-driven analysis of your development — zoning, financials, risk, and market positioning</div>
+        </div>
+      </div>
+
+      <!-- API Key Input (like Mapbox token) -->
+      <div id="ai-token-section" style="margin-bottom:12px">
+        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter your <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#AEBC46">Anthropic API key</a> to enable Claude AI analysis:</div>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="claude-key" placeholder="Paste your API key here (sk-ant-...)" onclick="if(this.value.startsWith('••'))this.value='';this.style.color='#AEBC46'" style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:8px 10px;border-radius:4px;font-size:12px;font-family:inherit">
+          <button class="btn-add" style="width:auto;padding:8px 16px" onclick="saveClaudeKey()">SAVE</button>
+          <button class="btn-add" style="width:auto;padding:8px 12px;background:#444;color:#ccc;font-size:10px" onclick="clearClaudeKey()">CLEAR</button>
+        </div>
+        <div id="ai-key-status" style="font-size:10px;margin-top:4px;min-height:14px"></div>
+      </div>
+
+      <!-- AI Capability Cards -->
+      <div id="ai-cards" style="display:flex;flex-direction:column;gap:10px">
+
+        <!-- Zoning Analysis -->
+        <div class="sec">
+          <div class="sec-hd" onclick="toggleAiSection(this)">
+            ZONING ANALYSIS <span class="arrow">▼</span>
+          </div>
+          <div class="sec-bd">
+            <div style="font-size:11px;color:#888;margin-bottom:8px">Interprets your zoning data and flags compliance issues with proposed massing.</div>
+            <button class="btn-add" onclick="requestAI('zoning-analysis')" id="ai-btn-zoning">🔍 ANALYZE ZONING COMPLIANCE</button>
+            <div id="ai-result-zoning" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <!-- Pro-Forma Optimization -->
+        <div class="sec">
+          <div class="sec-hd" onclick="toggleAiSection(this)">
+            PRO-FORMA OPTIMIZATION <span class="arrow">▼</span>
+          </div>
+          <div class="sec-bd">
+            <div style="font-size:11px;color:#888;margin-bottom:8px">Benchmarks your financials against market data and suggests unit mix / pricing improvements.</div>
+            <button class="btn-add" onclick="requestAI('proforma-optimize')" id="ai-btn-proforma">📊 OPTIMIZE PRO-FORMA</button>
+            <div id="ai-result-proforma" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <!-- Risk Assessment -->
+        <div class="sec">
+          <div class="sec-hd" onclick="toggleAiSection(this)">
+            RISK ASSESSMENT <span class="arrow">▼</span>
+          </div>
+          <div class="sec-bd">
+            <div style="font-size:11px;color:#888;margin-bottom:8px">Translates Monte Carlo simulation results into plain-language scenarios and mitigation strategies.</div>
+            <button class="btn-add" onclick="requestAI('risk-assessment')" id="ai-btn-risk">⚠️ ASSESS RISK PROFILE</button>
+            <div id="ai-result-risk" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <!-- Comparable Insights -->
+        <div class="sec">
+          <div class="sec-hd" onclick="toggleAiSection(this)">
+            COMPARABLE INSIGHTS <span class="arrow">▼</span>
+          </div>
+          <div class="sec-bd">
+            <div style="font-size:11px;color:#888;margin-bottom:8px">Analyzes your project against nearby comparable developments for market positioning.</div>
+            <button class="btn-add" onclick="requestAI('comparable-insights')" id="ai-btn-comps">🏗️ ANALYZE COMPARABLES</button>
+            <div id="ai-result-comps" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <!-- Report Narratives -->
+        <div class="sec">
+          <div class="sec-hd" onclick="toggleAiSection(this)">
+            REPORT NARRATIVES <span class="arrow">▼</span>
+          </div>
+          <div class="sec-bd">
+            <div style="font-size:11px;color:#888;margin-bottom:8px">Generates professional executive summary, market context, and recommendations for your report.</div>
+            <button class="btn-add" onclick="requestAI('report-narrative')" id="ai-btn-report">📝 GENERATE REPORT NARRATIVES</button>
+            <button class="btn-add" onclick="applyAIToReport()" id="ai-btn-apply-report" style="display:none;margin-top:6px;background:#444444;color:#AEBC46">⬇️ APPLY TO REPORT TAB</button>
+            <div id="ai-result-report" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Jurisdiction Selector -->
+      <div style="margin-top:16px;padding:10px 12px;border:1px solid #333;border-radius:6px;background:#1a1a1a">
+        <div style="font-size:10px;color:#888;margin-bottom:6px;font-weight:600;letter-spacing:1px">JURISDICTION</div>
+        <select id="ai-jurisdiction" class="project-select" onchange="aiJurisdictionChanged()">
+          <option value="">Auto-detect from address</option>
+          <option value="toronto">City of Toronto</option>
+          <option value="mississauga">City of Mississauga</option>
+          <option value="ottawa">City of Ottawa</option>
+          <option value="hamilton">City of Hamilton</option>
+        </select>
+        <div id="ai-jurisdiction-info" style="font-size:10px;color:#666;margin-top:4px"></div>
+      </div>
+    </div>
+
+    <div id="tab-report" class="tab-content">
+      <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:#AEBC46">HIGHEST &amp; BEST USE ANALYSIS</span>
+          <div style="font-size:10px;color:#777;margin-top:4px" id="report-subtitle">Project Analysis</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="requestAI('report-narrative')" style="background:#1a3a1a;color:#4a8;border:1px solid #4a8;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">✨ AI ENHANCE</button>
+          <button onclick="exportPDF()" style="background:#AEBC46;color:#111;border:none;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">⬇ EXPORT PDF</button>
+          <button onclick="exportPPTX()" style="background:#c49ade;color:#111;border:none;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">⬇ EXPORT PPTX</button>
+        </div>
+      </div>
+      <div id="report-content"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════ SITE MAP (Mapbox) ════════ -->
+<div id="sitemap-container" style="display:flex;flex:1;position:relative">
+  <div id="sitemap-map" style="width:100%;height:100%"></div>
+  <div id="sitemap-instructions" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(26,26,26,0.9);border:1px solid #333333;border-radius:8px;padding:8px 16px;font-size:11px;color:#888;white-space:nowrap;z-index:5">
+    <span style="color:#AEBC46;font-weight:600">Search</span> an address or <span style="color:#AEBC46;font-weight:600">Draw</span> a lot polygon
+  </div>
+</div>
+
+<!-- ════════ 3D CANVAS ════════ -->
+<div id="canvas-wrap" style="display:none">
+  <canvas id="c3d"></canvas>
+  <div id="view-btns">
+    <button onclick="setView('perspective')">PERSPECTIVE</button>
+    <button onclick="setView('front')">FROM NORTH</button>
+    <button onclick="setView('rear')">FROM SOUTH</button>
+    <button onclick="setView('aerial')">AERIAL</button>
+    <button onclick="setView('bird')">BIRD'S EYE</button>
+    <button onclick="toggleShadowStudy()" id="btn-shadow-toggle" style="background:rgba(26,26,26,.85);border-color:#e8c87a;color:#e8c87a">SHADOW STUDY</button>
+    <button onclick="toggleAngularPlanes()" id="btn-angular-toggle" style="background:rgba(26,26,26,.85);border-color:#c49ade;color:#c49ade">ANGULAR PLANES</button>
+    <button onclick="toggleInteriors()" id="btnInteriors" title="Toggle furnished interiors" style="background:rgba(26,26,26,.85);border-color:#e8a87a;color:#e8a87a">INTERIORS</button>
+    <!-- "Reshape" mode is now hidden by default. The primary interaction is to
+         click directly on the building and drag it (works for polygon volumes too). -->
+    <button onclick="togglePoly3DResize()" id="btn-poly3d-resize" title="Advanced: edit the polygon vertex by vertex" style="background:rgba(26,26,26,.85);border-color:#666;color:#888;display:none">⬄ RESHAPE</button>
+    <button onclick="togglePoly3DAddVertex()" id="btn-poly3d-add-vertex" title="Click on the building to insert a new vertex" style="background:rgba(26,26,26,.85);border-color:#fff;color:#fff;display:none">+ ADD DRAG POINT</button>
+    <button class="lighting-btn" id="btn-light-golden" onclick="setLightingPreset('golden')" style="background:rgba(174,188,70,0.3);color:#AEBC46;border-color:#AEBC46">☀️ GOLDEN</button>
+    <button class="lighting-btn" id="btn-light-night" onclick="setLightingPreset('night')" style="background:rgba(26,26,26,.85);border-color:#888;color:#888">🌙 NIGHT</button>
+    <button class="lighting-btn" id="btn-light-day" onclick="setLightingPreset('day')" style="background:rgba(26,26,26,.85);border-color:#888;color:#888">⛅ DAY</button>
+  </div>
+
+  <!-- Materials Legend Overlay -->
+  <div id="materials-legend" style="display:none;position:absolute;bottom:14px;left:14px;background:rgba(20,20,20,.88);border:1px solid rgba(174,188,70,.4);border-radius:6px;padding:10px 14px;z-index:6;font-family:inherit;pointer-events:none">
+    <div style="font-size:10px;font-weight:700;color:#AEBC46;letter-spacing:2px;margin-bottom:6px">MATERIALS</div>
+    <div style="display:flex;flex-direction:column;gap:3px">
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#b87a5a;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Brick Base</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#6a8a9a;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Retail Glazing</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#c49a6a;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Cedar Cladding</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#7a9aaa;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Curtain Wall</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#555555;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Exposed Steel</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#a06030;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Corten Accents</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#d0ccc4;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Floor Slabs</span></div>
+    </div>
+  </div>
+
+  <!-- Optimal Massing Overlay (on 3D canvas) — top-left of canvas, starts collapsed to a small badge so it never blocks the building -->
+  <div id="optimal-massing-overlay" style="display:none;position:absolute;top:14px;left:14px;width:320px;max-height:calc(100% - 230px);background:rgba(18,18,18,.96);border:1px solid rgba(174,188,70,.4);border-radius:8px;z-index:6;font-family:inherit;overflow:hidden;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,.5)">
+    <div style="padding:10px 14px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:8px">
+      <button id="optimal-massing-toggle-btn" onclick="(function(){var o=document.getElementById('optimal-massing-overlay');var c=document.getElementById('optimal-massing-overlay-content');var b=document.getElementById('optimal-massing-toggle-btn');var collapsed=c.style.display==='none';if(collapsed){c.style.display='block';b.innerHTML='\u25BC&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to collapse';o.style.maxHeight='calc(100% - 230px)';}else{c.style.display='none';b.innerHTML='\u25B6&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to expand details';o.style.maxHeight='auto';}})()" title="Click to expand details" style="background:none;border:none;color:#AEBC46;font-size:12px;font-weight:700;letter-spacing:1.5px;cursor:pointer;padding:0;font-family:inherit;flex:1;text-align:left">&#9654;&nbsp;OPTIMAL&nbsp;MASSING</button>
+      <button onclick="document.getElementById('optimal-massing-overlay').style.display='none'" title="Close" style="background:none;border:1px solid #555;color:#888;font-size:14px;cursor:pointer;padding:1px 9px;border-radius:3px;line-height:1;flex-shrink:0">&times;</button>
+    </div>
+    <div id="optimal-massing-overlay-content" class="om-overlay-scaled" style="display:none;padding:12px 14px;overflow-y:auto;flex:1;font-size:11px;color:#ccc"></div>
+  </div>
+
+  <!-- Shadow Study Panel -->
+  <div id="shadow-panel" style="display:none;position:absolute;top:14px;left:14px;background:rgba(26,26,26,.95);border:1px solid #e8c87a;border-radius:6px;padding:12px 14px;z-index:6;min-width:240px;font-family:inherit">
+    <div style="font-size:10px;font-weight:700;color:#e8c87a;letter-spacing:2px;margin-bottom:8px">SHADOW &amp; SUN STUDY</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <div style="flex:1">
+        <label style="font-size:9px;color:#888;display:block;margin-bottom:2px">DATE</label>
+        <input type="date" id="shadow-date" value="2025-06-21" onchange="updateShadowStudy()" style="width:100%;background:#1a1a1a;border:1px solid #444;color:#e8c87a;padding:4px 6px;border-radius:3px;font-size:11px;font-family:inherit">
+      </div>
+      <div style="flex:0 0 70px">
+        <label style="font-size:9px;color:#888;display:block;margin-bottom:2px">HOUR</label>
+        <div id="shadow-time-val" style="font-size:16px;font-weight:700;color:#e8c87a;text-align:center">12:00</div>
+      </div>
+    </div>
+    <input type="range" id="shadow-time" min="5" max="21" step="0.25" value="12" style="width:100%;accent-color:#e8c87a;margin-bottom:6px" oninput="updateShadowStudy()">
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:#666;margin-bottom:10px"><span>5 AM</span><span>NOON</span><span>9 PM</span></div>
+    <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">
+      <button onclick="setShadowPreset('spring')" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#e8c87a;color:#e8c87a;padding:3px 6px">MAR 21</button>
+      <button onclick="setShadowPreset('summer')" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#e8c87a;color:#e8c87a;padding:3px 6px">JUN 21</button>
+      <button onclick="setShadowPreset('fall')" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#e8c87a;color:#e8c87a;padding:3px 6px">SEP 21</button>
+      <button onclick="setShadowPreset('winter')" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#e8c87a;color:#e8c87a;padding:3px 6px">DEC 21</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button onclick="animateShadow()" id="shadow-animate-btn" class="sec3d-btn" style="flex:1;border-color:#e8c87a;color:#e8c87a;padding:5px 10px">▶ ANIMATE DAY</button>
+      <button onclick="captureShadowGrid()" class="sec3d-btn" style="flex:1;border-color:#e8c87a;color:#e8c87a;padding:5px 10px">CAPTURE GRID</button>
+    </div>
+    <div id="shadow-info" style="font-size:10px;color:#999;border-top:1px solid #333;padding-top:6px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">
+        <span>Altitude:</span><span id="shadow-alt" style="color:#e8c87a;text-align:right">—</span>
+        <span>Azimuth:</span><span id="shadow-azi" style="color:#e8c87a;text-align:right">—</span>
+        <span>Sunrise:</span><span id="shadow-rise" style="color:#e8c87a;text-align:right">—</span>
+        <span>Sunset:</span><span id="shadow-set" style="color:#e8c87a;text-align:right">—</span>
+      </div>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button onclick="setShadowGround('light')" id="sg-light" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#e8c87a;color:#e8c87a;padding:3px">LIGHT GROUND</button>
+      <button onclick="setShadowGround('dark')" id="sg-dark" class="sec3d-btn" style="flex:1;font-size:9px;border-color:#555;color:#888;padding:3px">DARK GROUND</button>
+    </div>
+  </div>
+
+  <!-- Shadow capture grid -->
+  <div id="shadow-grid-overlay" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:50;overflow:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;color:#e8c87a;letter-spacing:2px">SHADOW STUDY — TIME SERIES</div>
+      <button onclick="closeShadowGrid()" style="background:#444;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">✕ CLOSE</button>
+    </div>
+    <div id="shadow-grid-content" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"></div>
+  </div>
+
+  <div id="info-bar">LOT — Draw on Site Map to begin</div>
+  <div id="tooltip"></div>
+</div>
+
+<!-- ════════ ERROR OVERLAY ════════ -->
+<div id="error-overlay"><button class="error-close" onclick="this.parentElement.style.display='none'">&times;</button><span class="error-msg"></span> <span class="error-file"></span></div>
+<script>
+// Global error handler — shows red banner with file + error
+window.onerror=function(msg,src,line,col){
+  var el=document.getElementById('error-overlay');if(!el)return;
+  var f=src?src.split('/').pop():'unknown';
+  el.querySelector('.error-msg').textContent=msg;
+  el.querySelector('.error-file').textContent='['+f+':'+line+']';
+  el.style.display='block';
+};
+window.addEventListener('unhandledrejection',function(e){
+  var el=document.getElementById('error-overlay');if(!el)return;
+  el.querySelector('.error-msg').textContent='Promise: '+(e.reason&&e.reason.message||e.reason||'Unknown');
+  el.querySelector('.error-file').textContent='';
+  el.style.display='block';
+});
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js" crossorigin="anonymous"></script>
+
+<!-- ═══ APPLICATION MODULES (loaded in dependency order) ═══ -->
+<!-- Cache-bust version: bump this string to force browsers to re-fetch ALL JS files -->
+<script src="js/data-model.js?v=20260419v"></script>
+<script src="js/lot-geometry.js?v=20260419v"></script>
+<script src="js/renderer.js?v=20260419v"></script>
+<script src="js/save-load.js?v=20260419v"></script>
+<script src="js/proforma.js?v=20260419v"></script>
+<script src="js/report.js?v=20260419v"></script>
+<script src="js/section3d.js?v=20260419v"></script>
+<script src="js/renderer-components.js?v=20260419v"></script>
+<script src="js/unit-mix.js?v=20260419v"></script>
+<script src="js/sitemap.js?v=20260419v"></script>
+<script src="js/optimal-massing.js?v=20260419v"></script>
+<script src="js/ai-chat.js?v=20260419v"></script>
+<script src="js/scenarios.js?v=20260419v"></script>
+<script src="js/zoning.js?v=20260419v"></script>
+<script src="js/ui.js?v=20260419v"></script>
+
+</body>
+</html>
