@@ -1,4 +1,4 @@
-// cache-buster: 20260505z
+// cache-buster: 20260506a
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -2163,28 +2163,28 @@
     return grp;
   }
 
-  // Hook into rebuildAll. Defer 80ms so the renderer finishes first.
-  if(typeof window !== 'undefined'){
-    var _origRA_v = window.rebuildAll;
-    if(typeof _origRA_v === 'function'){
-      window.rebuildAll = function(){
-        var r = _origRA_v.apply(this, arguments);
-        setTimeout(function(){
-          try {
-            var stats = _hideAllInWarehouseFootprint();
-            var grp = _buildCustomWarehouseBox();
-            if(stats.hidden > 0 || grp){
-              if(!window._industrialBoxLogged){
-                console.log('[Industrial box] hid ' + stats.hidden + ' residential meshes/lines, drew clean custom 40 ft tilt-up warehouse box');
-                window._industrialBoxLogged = true;
-              }
-            }
-          } catch(e){ console.warn('[Industrial box] error:', e && e.message); }
-        }, 80);
-        return r;
-      };
-    }
+  // Register as postRender hook (80 ms — renderer needs to finish first).
+  // Migrated from rebuildAll wrapper to hook registry.
+  function _customWarehouseHookFn(){
+    try {
+      var stats = _hideAllInWarehouseFootprint();
+      var grp = _buildCustomWarehouseBox();
+      if(stats.hidden > 0 || grp){
+        if(!window._industrialBoxLogged){
+          console.log('[Industrial box] hid ' + stats.hidden + ' residential meshes/lines, drew clean custom 40 ft tilt-up warehouse box');
+          window._industrialBoxLogged = true;
+        }
+      }
+    } catch(e){ console.warn('[Industrial box] error:', e && e.message); }
   }
+  function _registerCustomWarehouse(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerCustomWarehouse, 50);
+      return;
+    }
+    window.registerRebuildHook('postRender', 'customWarehouseBox', _customWarehouseHookFn, 80);
+  }
+  _registerCustomWarehouse();
   window._buildCustomIndustrialWarehouse = _buildCustomWarehouseBox;
   window._hideResidentialInWarehouse = _hideAllInWarehouseFootprint;
 })();
@@ -2646,17 +2646,17 @@
     } catch(e){ console.warn('[Site prep] hide context error:', e && e.message); }
   }
 
-  // Hook into rebuildAll. Defer 100ms so groups.context rebuild finishes first.
-  if(typeof window !== 'undefined'){
-    var _origRA_ctxhide = window.rebuildAll;
-    if(typeof _origRA_ctxhide === 'function'){
-      window.rebuildAll = function(){
-        var r = _origRA_ctxhide.apply(this, arguments);
-        setTimeout(_hideContextInLot, 100);
-        return r;
-      };
+  // Register as postRender hook (100 ms after rebuild — groups.context
+  // needs that long to finish populating from Mapbox tile loads).
+  // Migrated from rebuildAll wrapper to hook registry.
+  function _registerCtxHide(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerCtxHide, 50);
+      return;
     }
+    window.registerRebuildHook('postRender', 'hideContextInLot', _hideContextInLot, 100);
   }
+  _registerCtxHide();
   window._hideContextBuildingsInLot = _hideContextInLot;
   // Reset so the next rebuild logs again (useful when user changes lot)
   window._resetContextHideLog = function(){ window._contextHideLogged = false; };
