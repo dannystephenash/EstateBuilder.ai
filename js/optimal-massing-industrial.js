@@ -1,4 +1,4 @@
-// cache-buster: 20260505y
+// cache-buster: 20260505z
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -4354,21 +4354,18 @@
     return { passed: passed, failed: failed, violations: violations };
   }
 
-  // Hook validator into rebuildAll AFTER the existing chain
-  if(typeof window !== 'undefined'){
-    var _origRA_validate = window.rebuildAll;
-    if(typeof _origRA_validate === 'function'){
-      window.rebuildAll = function(){
-        var r = _origRA_validate.apply(this, arguments);
-        // Defer 200ms so post-render hooks (decor at +130ms, custom box at
-        // +80ms) finish populating state before we check it.
-        setTimeout(function(){
-          try { validateState(); } catch(e){ console.warn('[State validator] error:', e && e.message); }
-        }, 200);
-        return r;
-      };
+  // Register validator as a postRender hook (200 ms after rebuild).
+  // FIRST migration from the wrapper-on-wrapper pattern to the registry —
+  // the validator is the safest one because it only LOGS, never mutates.
+  // Deferred registration in case the registry IIFE hasn't run yet.
+  function _registerValidator(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerValidator, 50);
+      return;
     }
+    window.registerRebuildHook('postRender', 'validateState', validateState, 200);
   }
+  _registerValidator();
   window._validateState = validateState;
   window.__runSelfTest = runSelfTest;
   console.log('[State validator] installed — run __runSelfTest() in console to verify state');
