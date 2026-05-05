@@ -1,4 +1,4 @@
-// cache-buster: 20260506a
+// cache-buster: 20260506b
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -1825,18 +1825,21 @@
     }
   }
 
-  // Hook into rebuildAll AFTER the existing paint hook fires.
-  if(typeof window !== 'undefined'){
-    var _origRA_decor = window.rebuildAll;
-    if(typeof _origRA_decor === 'function'){
-      window.rebuildAll = function(){
-        var r = _origRA_decor.apply(this, arguments);
-        // Run a bit AFTER the paint hook (which runs at +60ms)
-        setTimeout(_drawIndustrialDecor, 130);
-        return r;
-      };
+  // Register as postRender hook (130 ms — after the +60ms paint hook).
+  // Migrated from rebuildAll wrapper to hook registry. Note that
+  // _drawIndustrialDecor is itself wrapped further down by the rotation
+  // wrap (window._drawIndustrialDecor gets monkey-patched there); the
+  // hook fires the latest assigned version, so the rotation wrap still
+  // takes effect.
+  function _registerDecorHook(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerDecorHook, 50);
+      return;
     }
+    window.registerRebuildHook('postRender', 'drawIndustrialDecor',
+      function(){ window._drawIndustrialDecor(); }, 130);
   }
+  _registerDecorHook();
   window._drawIndustrialDecor = _drawIndustrialDecor;
 })();
 
@@ -2830,24 +2833,25 @@
     }
   }
 
-  // Pre-render filter runs SYNCHRONOUSLY before rebuildAll, so the renderer
-  // doesn't even see in-lot buildings.
-  // Post-render hide runs at 100/500/1500/3000ms to catch async captures.
-  if(typeof window !== 'undefined'){
-    var _origRA_z = window.rebuildAll;
-    if(typeof _origRA_z === 'function'){
-      window.rebuildAll = function(){
-        try { _filterContextFeaturesPreRender(); } catch(e){}
-        var r = _origRA_z.apply(this, arguments);
-        // Multi-pass post-render hide
-        setTimeout(_postRenderHideInLot, 100);
-        setTimeout(_postRenderHideInLot, 500);
-        setTimeout(_postRenderHideInLot, 1500);
-        setTimeout(_postRenderHideInLot, 3000);
-        return r;
-      };
+  // Migrated from rebuildAll wrapper to hook registry:
+  //   • _filterContextFeaturesPreRender runs synchronously BEFORE rebuild
+  //     (preRebuild hook, priority 10) so context-building data is filtered
+  //     before the renderer ever sees it.
+  //   • _postRenderHideInLot runs FOUR times after rebuild at 100, 500,
+  //     1500, 3000 ms — Mapbox PMTiles loads context buildings async, so
+  //     we re-hide on a multi-pass schedule.
+  function _registerCtxFilterHooks(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerCtxFilterHooks, 50);
+      return;
     }
+    window.registerRebuildHook('preRebuild',  'filterContextFeatures', _filterContextFeaturesPreRender, 10);
+    window.registerRebuildHook('postRender',  'postHideInLot-100',  _postRenderHideInLot,  100);
+    window.registerRebuildHook('postRender',  'postHideInLot-500',  _postRenderHideInLot,  500);
+    window.registerRebuildHook('postRender',  'postHideInLot-1500', _postRenderHideInLot, 1500);
+    window.registerRebuildHook('postRender',  'postHideInLot-3000', _postRenderHideInLot, 3000);
   }
+  _registerCtxFilterHooks();
   window._aggressiveHideContextInLot = _postRenderHideInLot;
   window._preFilterContextInLot = _filterContextFeaturesPreRender;
 })();
