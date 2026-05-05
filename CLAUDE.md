@@ -129,4 +129,11 @@ Files are loaded in this order (each can use globals from all files above it):
 | Playwright best practices, e2e test, browser automation, test selectors | `skills/playwright-best-practices/SKILL.md` |
 | Zoning approval, ZBLA, site plan, FSI target, corridor precedent, CBC, tower separation, angular plane, MTSA, density, developer feasibility | `skills/toronto-planning-approvals/SKILL.md` |
 | Bug, debug, error, broken, fix, regression, root cause, investigate | `skills/systematic-debugging/SKILL.md` |
-| Done, complete, finish, verify, prove, confirm it works, check | `skills/verification-before-comple
+| Done, complete, finish, verify, prove, confirm it works, check | `skills/verification-before-completion/SKILL.md` |
+
+### Loading rules:
+1. For ANY 3D/renderer work: ALWAYS read `threejs-r128-constraint-SKILL.md` FIRST, then the topic-specific skill
+2. Multiple skills can be loaded for one task (e.g., materials + textures + lighting)
+3. **Before writing any non-trivial code, scan `skills/` for relevant SKILL.md files** — new skills may have been added since this table was last updated
+4. Skills override general knowledge — if a skill says "don't use X", don't use X
+5. If you find a skill not listed in the table above, still use it and follow its instructions

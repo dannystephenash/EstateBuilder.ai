@@ -24,7 +24,7 @@ const P={
   landscape:[],
   unitPlan:{
     mode:'auto',
-    corridorWidthFt:5.5,
+    corridorWidthFt:4,
     floors:[],
     unitTypes:[
       {type:'Studio',defaultSize:425,color:'#e8c87a'},

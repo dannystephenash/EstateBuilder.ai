@@ -5,12 +5,157 @@ let smLotDrawing=false;
 let smLotDrawPts=[];
 let smLotDrawMarkers=[];
 
+// ═══════════════════════════════════════════════════════════════════════════════════
+// ── Snap-to-vertex system ──
+// When drawing lot polygons, vertices snap to nearby existing points so the user
+// gets precise alignment without manually lining things up. Snap targets include:
+//   1. Other vertices in the polygon currently being drawn
+//   2. Existing lot polygon vertices (from a previously drawn/picked lot)
+//   3. Picked parcel vertices (from the parcel picker)
+// A visual snap indicator (pulsing ring) appears when the cursor is near a snap target.
+// ═══════════════════════════════════════════════════════════════════════════════════
+const SM_SNAP_THRESHOLD_PX = 15; // snap within 15 screen pixels (zoom-independent)
+let smSnapIndicator = null;      // DOM element for snap preview ring
+let smSnapTarget = null;         // current snap target [lng, lat] or null
+let smSnapParcelCache = [];      // cached parcel vertices (survives smCancelMultiParcel)
+
+/**
+ * Collect all candidate snap points from available sources.
+ * @returns {Array<[number,number]>} Array of [lng, lat] coordinate pairs
+ */
+function smGetSnapTargets() {
+  var targets = [];
+
+  // 1. Vertices already placed in the current drawing
+  if (smLotDrawPts && smLotDrawPts.length > 0) {
+    smLotDrawPts.forEach(function(p) { targets.push(p); });
+  }
+
+  // 2. Existing lot polygon vertices
+  if (smLotData && smLotData.vertices && smLotData.vertices.length > 0) {
+    smLotData.vertices.forEach(function(p) { targets.push(p); });
+  }
+
+  // 3. Picked parcel vertices (live — when picker is active)
+  if (typeof smSelectedParcels !== 'undefined' && smSelectedParcels && smSelectedParcels.length > 0) {
+    smSelectedParcels.forEach(function(parcel) {
+      if (parcel.ringCoords && parcel.ringCoords.length > 0) {
+        parcel.ringCoords.forEach(function(p) { targets.push(p); });
+      }
+    });
+  }
+
+  // 4. Cached parcel vertices (when picker was cleared before drawing)
+  if (smSnapParcelCache.length > 0) {
+    smSnapParcelCache.forEach(function(p) { targets.push(p); });
+  }
+
+  return targets;
+}
+
+/**
+ * Find the nearest snap target within threshold for a given point.
+ * Uses screen-pixel distance so the threshold feels consistent at any zoom.
+ * @param {[number,number]} pt - [lng, lat]
+ * @returns {{point:[number,number], dist:number}|null}
+ */
+function smFindSnapPoint(pt) {
+  var targets = smGetSnapTargets();
+  if (!smMap || targets.length === 0) return null;
+
+  var screenPt = smMap.project(pt);
+  var best = null;
+  var bestDist = Infinity;
+
+  for (var i = 0; i < targets.length; i++) {
+    var t = targets[i];
+    if (Math.abs(t[0] - pt[0]) < 1e-10 && Math.abs(t[1] - pt[1]) < 1e-10) continue;
+    var screenT = smMap.project(t);
+    var dx = screenPt.x - screenT.x;
+    var dy = screenPt.y - screenT.y;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = t;
+    }
+  }
+
+  if (best && bestDist <= SM_SNAP_THRESHOLD_PX) {
+    return {point: best, dist: bestDist};
+  }
+  return null;
+}
+
+/**
+ * Show/hide/move the snap indicator ring on the map.
+ * @param {[number,number]|null} lngLat - position to show, or null to hide
+ */
+function smUpdateSnapIndicator(lngLat) {
+  if (!smMap) return;
+
+  if (!lngLat) {
+    // Hide indicator
+    if (smSnapIndicator) {
+      smSnapIndicator.remove();
+      smSnapIndicator = null;
+    }
+    smSnapTarget = null;
+    return;
+  }
+
+  smSnapTarget = lngLat;
+
+  if (!smSnapIndicator) {
+    var el = document.createElement('div');
+    el.style.cssText = 'width:22px;height:22px;border:3px solid #00ffaa;border-radius:50%;' +
+      'background:rgba(0,255,170,0.15);pointer-events:none;' +
+      'animation:smSnapPulse 0.8s ease-in-out infinite alternate;';
+    // Add keyframe animation if not already present
+    if (!document.getElementById('sm-snap-style')) {
+      var style = document.createElement('style');
+      style.id = 'sm-snap-style';
+      style.textContent = '@keyframes smSnapPulse{0%{transform:scale(1);opacity:1}100%{transform:scale(1.4);opacity:0.5}}';
+      document.head.appendChild(style);
+    }
+    smSnapIndicator = new mapboxgl.Marker({element: el, anchor: 'center'})
+      .setLngLat(lngLat)
+      .addTo(smMap);
+  } else {
+    smSnapIndicator.setLngLat(lngLat);
+  }
+}
+
+/**
+ * Mousemove handler during lot drawing — shows snap preview.
+ */
+function smLotDrawMouseMove(e) {
+  if (!smLotDrawing) return;
+  var pt = [e.lngLat.lng, e.lngLat.lat];
+  var snap = smFindSnapPoint(pt);
+  if (snap) {
+    smUpdateSnapIndicator(snap.point);
+    smMap.getCanvas().style.cursor = 'pointer';
+  } else {
+    smUpdateSnapIndicator(null);
+    smMap.getCanvas().style.cursor = 'crosshair';
+  }
+}
+
 /**
  * Enters lot-drawing mode on the site map, allowing the user to click vertices
  * to define a custom lot polygon. Cancels any active parcel picker or building draw.
  */
 function sitemapDraw(){
   if(!smMap)return;
+  // Cache parcel vertices for snapping BEFORE cancel clears them
+  smSnapParcelCache = [];
+  if (typeof smSelectedParcels !== 'undefined' && smSelectedParcels && smSelectedParcels.length > 0) {
+    smSelectedParcels.forEach(function(parcel) {
+      if (parcel.ringCoords && parcel.ringCoords.length > 0) {
+        parcel.ringCoords.forEach(function(p) { smSnapParcelCache.push(p.slice()); });
+      }
+    });
+  }
   // Cancel parcel picker if active
   if(smParcelPickerActive){smCancelMultiParcel();}
   // Cancel building drawing if active
@@ -31,12 +176,17 @@ function sitemapDraw(){
   smLotDrawPts=[];
   smMap.getCanvas().style.cursor='crosshair';
   smMap.on('click',smLotClickHandler);
+  smMap.on('mousemove',smLotDrawMouseMove);
   document.getElementById('sitemap-instructions').innerHTML='<b style="color:#AEBC46">Click</b> to place vertices · <b style="color:#AEBC46">Click first vertex</b> or press <b>CLOSE</b> to finish<br><button onclick="smCloseLotPoly()" style="margin-top:4px;background:#AEBC46;color:#111;border:none;border-radius:4px;padding:5px 20px;cursor:pointer;font-weight:700;font-size:12px">CLOSE LOT POLYGON</button> <button onclick="smCancelLotDraw()" style="margin-top:4px;background:#c44;color:#fff;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-weight:600;font-size:11px;margin-left:4px">CANCEL</button>';
 }
 
 function smLotClickHandler(e){
   if(!smLotDrawing||smBldgDrawing)return;
-  const pt=[e.lngLat.lng,e.lngLat.lat];
+  var pt=[e.lngLat.lng,e.lngLat.lat];
+
+  // Apply snap if cursor is near a snap target
+  var snap=smFindSnapPoint(pt);
+  if(snap) pt=snap.point.slice(); // use snapped coordinates (clone to avoid mutation)
 
   // If 3+ points and click near first vertex → close
   if(smLotDrawPts.length>=3){
@@ -81,6 +231,10 @@ function smCloseLotPoly(){
   smLotDrawing=false;
   smMap.getCanvas().style.cursor='';
   smMap.off('click',smLotClickHandler);
+  smMap.off('mousemove',smLotDrawMouseMove);
+  if(smSnapIndicator){smSnapIndicator.remove();smSnapIndicator=null;}
+  smSnapTarget=null;
+  smSnapParcelCache=[];
   smLotDrawMarkers.forEach(m=>m.remove());
   smLotDrawMarkers=[];
   try{if(smMap.getLayer('sm-lot-draw-line'))smMap.removeLayer('sm-lot-draw-line');}catch(e){}
@@ -167,13 +321,49 @@ function smCloseLotPoly(){
     });
   }catch(e){console.error('fetchNearbyComparables threw:',e);smShowToast('Comparables error: '+(e && e.message || 'unknown'),'#c44');}
 
-  // Always detect zoning immediately (don't wait for geocode)
+  // Always detect zoning immediately (don't wait for geocode).
+  // Use detectZoningAuto if available - dispatches to Toronto OR Mississauga
+  // based on lat/lng bounds. Falls back to legacy detectZoning if the auto
+  // wrapper hasn't loaded yet.
   try{
-  detectZoning(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
+  var _zoneFn = (typeof window.detectZoningAuto === 'function') ? window.detectZoningAuto : detectZoning;
+  _zoneFn(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
     if(_isStale()){ return; } // user redrew lot — discard old zoning
     P.zoning=zoning;
     autoSave();
     if(zoning&&zoning.zone) smShowToast('Zoning detected: '+(zoning.zoneString||zoning.zone),'#4ecdc4');
+
+    // ── Mississauga (or anywhere): auto-capture surrounding 3D buildings as
+    //    Site Plan context. Try the city's own LOD 1.75 dataset first; if
+    //    that fails (network/dataset URL/CORS), fall back to OpenStreetMap's
+    //    Overpass API which has every building tagged with height or storeys.
+    //    Toronto sites separately use Mapbox composite buildings via
+    //    smCaptureContextBuildings — we only run this for non-Toronto sites
+    //    or as a supplement.
+    var _isMiss = zoning && zoning.jurisdiction === 'Mississauga';
+    if(_isMiss){
+      if(typeof window.captureMississaugaContextBuildings === 'function'){
+        try {
+          var p = window.captureMississaugaContextBuildings(1000);
+          if(p && p.catch){
+            p.catch(function(e){
+              console.warn('[Miss buildings] official source failed, trying OSM fallback:', e && e.message);
+              if(typeof window.captureOSMContextBuildings === 'function'){
+                window.captureOSMContextBuildings(1000);
+              }
+            });
+          }
+        } catch(e){
+          console.warn('[Miss buildings] context capture threw, trying OSM:', e);
+          if(typeof window.captureOSMContextBuildings === 'function'){
+            try { window.captureOSMContextBuildings(1000); } catch(e2){}
+          }
+        }
+      } else if(typeof window.captureOSMContextBuildings === 'function'){
+        // Mississauga module not loaded — go straight to OSM
+        try { window.captureOSMContextBuildings(1000); } catch(e){}
+      }
+    }
     const zi=document.getElementById('zoning-info');
     // Verify the DOM node is still attached — tab switch may have recreated it
     if(zi && document.contains(zi) && zoning.zone){
@@ -235,7 +425,10 @@ function smCloseLotPoly(){
 function smCancelLotDraw(){
   smLotDrawing=false;
   smLotDrawPts=[];
-  if(smMap){smMap.getCanvas().style.cursor='';smMap.off('click',smLotClickHandler);}
+  if(smMap){smMap.getCanvas().style.cursor='';smMap.off('click',smLotClickHandler);smMap.off('mousemove',smLotDrawMouseMove);}
+  if(smSnapIndicator){smSnapIndicator.remove();smSnapIndicator=null;}
+  smSnapTarget=null;
+  smSnapParcelCache=[];
   smLotDrawMarkers.forEach(m=>m.remove());
   smLotDrawMarkers=[];
   try{if(smMap&&smMap.getLayer('sm-lot-draw-line'))smMap.removeLayer('sm-lot-draw-line');}catch(e){}
@@ -414,11 +607,192 @@ function sitemapToggleStyle(){
   if(!smMap)return;
   smStyle=smStyle==='satellite'?'dark':'satellite';
   smMap.setStyle(smStyle==='satellite'?'mapbox://styles/mapbox/satellite-streets-v12':'mapbox://styles/mapbox/dark-v11');
+  // Re-add 3D buildings after style swap (style change removes all custom layers)
+  if(smIs3D){
+    smMap.once('styledata', function(){ setTimeout(smEnable3DBuildings, 300); });
+  }
 }
 function sitemapToggle3D(){
   if(!smMap)return;
   smIs3D=!smIs3D;
   smMap.easeTo({pitch:smIs3D?60:0,duration:800});
+  // Add/show 3D building extrusions when entering 3D mode
+  if(smIs3D) smEnable3DBuildings();
+  else smDisable3DBuildings();
+}
+
+/** Add Mapbox 3D building extrusion layer using the composite tileset's building data. */
+function smEnable3DBuildings(){
+  if(!smMap) return;
+  // Wait for style to be loaded
+  if(!smMap.isStyleLoaded()){ smMap.once('styledata', smEnable3DBuildings); return; }
+
+  // Check if layer already exists
+  if(smMap.getLayer('sm-3d-buildings')) {
+    smMap.setLayoutProperty('sm-3d-buildings','visibility','visible');
+    return;
+  }
+
+  // The satellite-streets-v12 style has building data in the composite source.
+  // Find the first symbol layer to insert the 3D buildings underneath labels.
+  var labelLayerId;
+  var layers = smMap.getStyle().layers;
+  for(var i = 0; i < layers.length; i++){
+    if(layers[i].type === 'symbol' && layers[i].layout && layers[i].layout['text-field']){
+      labelLayerId = layers[i].id;
+      break;
+    }
+  }
+
+  smMap.addLayer({
+    id: 'sm-3d-buildings',
+    source: 'composite',
+    'source-layer': 'building',
+    filter: ['==', 'extrude', 'true'],
+    type: 'fill-extrusion',
+    minzoom: 14,
+    paint: {
+      'fill-extrusion-color': '#aaa',
+      // Coalesce falls back to 0 when a tile feature is missing the height/min_height
+      // property — without this, Mapbox throws "Cannot read properties of undefined
+      // (reading 'get')" inside draw_fill_extrusion.js for any unproperty-tagged feature.
+      'fill-extrusion-height': ['interpolate',['linear'],['zoom'],
+        14, 0,
+        14.5, ['coalesce', ['get','height'], 0]
+      ],
+      'fill-extrusion-base': ['interpolate',['linear'],['zoom'],
+        14, 0,
+        14.5, ['coalesce', ['get','min_height'], 0]
+      ],
+      'fill-extrusion-opacity': 0.5
+    }
+  }, labelLayerId);
+}
+
+function smDisable3DBuildings(){
+  if(!smMap) return;
+  if(smMap.getLayer('sm-3d-buildings')){
+    smMap.setLayoutProperty('sm-3d-buildings','visibility','none');
+  }
+}
+
+/**
+ * Captures neighbouring building footprints from Mapbox tiles and stores them
+ * on P._contextBuildingFeatures as simplified GeoJSON-like objects.
+ * The satellite-streets style doesn't reference the 'building' source-layer by default,
+ * so tiles aren't loaded unless we add a layer that uses them. This function:
+ *   1. Ensures the 3D buildings layer exists (triggers tile fetch)
+ *   2. Polls with increasing delays until features arrive (max ~8s)
+ *   3. On success, stores features and triggers a deferred massing rebuild
+ */
+function smCaptureContextBuildings(){
+  P._contextBuildingFeatures = [];
+  if(!smMap) return;
+
+  // Ensure the 3D buildings layer exists so Mapbox fetches building tiles
+  var addedLayer = false;
+  if(!smMap.getLayer('sm-3d-buildings')){
+    smEnable3DBuildings();
+    addedLayer = true;
+  } else {
+    // Make sure it's visible so tiles get fetched
+    try { smMap.setLayoutProperty('sm-3d-buildings','visibility','visible'); } catch(e){}
+  }
+
+  // Poll for features — tiles take time to load from the CDN
+  var attempt = 0;
+  var delays = [200, 500, 1000, 1500, 2000, 3000]; // cumulative ~8.2s max wait
+  function poll(){
+    var features = _smQueryBuildingFeatures();
+    if(features.length > 0){
+      _smProcessBuildingFeatures(features);
+      _smCleanupCaptureLayer(addedLayer);
+      // If we're already on the massing tab or a rebuild has run, update context
+      if(typeof rebuildContextBuildings === 'function'){
+        try { rebuildContextBuildings(); } catch(e){ console.error('Deferred context rebuild:', e); }
+      }
+      /* Also rebuild the user's building so the per-edge abutment check
+         (which reads _ctxBuildingPolysFt populated by rebuildContextBuildings)
+         re-runs with the freshly-captured context — otherwise windows on
+         abutted edges would stay visible until the next manual rebuild. */
+      if(typeof rebuildBuilding === 'function'){
+        try { rebuildBuilding(); } catch(e){ console.error('Deferred building rebuild:', e); }
+      }
+      return;
+    }
+    attempt++;
+    if(attempt < delays.length){
+      setTimeout(poll, delays[attempt]);
+    } else {
+      console.log('Context buildings: no features found after', delays.length, 'attempts');
+      _smCleanupCaptureLayer(addedLayer);
+    }
+  }
+  // First attempt after short delay to let Mapbox start fetching tiles
+  setTimeout(poll, delays[0]);
+}
+
+function _smCleanupCaptureLayer(addedLayer){
+  // Hide layer if we added it just for capture and 3D mode isn't active
+  if(addedLayer && !smIs3D && smMap && smMap.getLayer('sm-3d-buildings')){
+    try { smMap.setLayoutProperty('sm-3d-buildings','visibility','none'); } catch(e){}
+  }
+}
+
+/** Query building features from Mapbox source tiles or rendered layer. */
+function _smQueryBuildingFeatures(){
+  if(!smMap) return [];
+  var features = [];
+  try {
+    features = smMap.querySourceFeatures('composite', {sourceLayer: 'building'});
+  } catch(e){}
+  // Fallback: rendered features from the 3D layer
+  if((!features || features.length === 0)){
+    try {
+      if(smMap.getLayer('sm-3d-buildings')){
+        features = smMap.queryRenderedFeatures({layers:['sm-3d-buildings']});
+      }
+    } catch(e2){}
+  }
+  return features || [];
+}
+
+/** De-duplicate and store building features on P._contextBuildingFeatures. */
+function _smProcessBuildingFeatures(features){
+  P._contextBuildingFeatures = [];
+  if(!features || features.length === 0){
+    console.log('Context buildings captured: 0');
+    return;
+  }
+  var seen = {};
+  features.forEach(function(feat){
+    if(!feat.geometry) return;
+    var gt = feat.geometry.type;
+    if(gt !== 'Polygon' && gt !== 'MultiPolygon') return;
+    var h = (feat.properties && feat.properties.height) ? parseFloat(feat.properties.height) : 8;
+    var mh = (feat.properties && feat.properties.min_height) ? parseFloat(feat.properties.min_height) : 0;
+    if(!isFinite(h) || h <= 0) h = 8;
+    if(!isFinite(mh)) mh = 0;
+
+    var polys = gt === 'MultiPolygon' ? feat.geometry.coordinates : [feat.geometry.coordinates];
+    polys.forEach(function(rings){
+      if(!rings || !rings[0] || rings[0].length < 4) return;
+      var key = rings[0][0][0].toFixed(5) + ',' + rings[0][0][1].toFixed(5) + ',' + h.toFixed(1);
+      if(seen[key]) return;
+      seen[key] = true;
+      P._contextBuildingFeatures.push({
+        coords: rings[0],
+        height: h,
+        minHeight: mh
+      });
+    });
+  });
+  console.log('Context buildings captured:', P._contextBuildingFeatures.length);
+  // Trigger a Three.js context-group rebuild so newly captured features render
+  // immediately. Mirrors the same pattern in OSM / Mississauga / MS-Canadian loaders.
+  if(typeof rebuildContextBuildings === 'function'){
+    try { rebuildContextBuildings(); } catch(e){ console.warn('[smCapture] rebuildContextBuildings failed:', e); }
+  }
 }
 
 function smOnDraw(e){
@@ -569,9 +943,17 @@ function sitemapApplyToMassing(){
   const minZ=Math.min(...allZ), maxZ=Math.max(...allZ);
   const lotWidth=maxX-minX, lotDepth=maxZ-minZ;
 
+  // Store GPS origin for coordinate transforms (used by context buildings in massing view)
+  P._gpsOrigin = {lng: originLng, lat: originLat};
+
+  // Capture neighbouring building footprints while tiles are loaded
+  smCaptureContextBuildings();
+
   // Store the polygon vertices directly — lotVerts() will use these
   P.lot={
     polyVerts: polyVerts,
+    gpsVerts: verts.map(function(v){return [v[0],v[1]];}),
+    gpsOrigin: {lng: originLng, lat: originLat},
     // Keep parametric values as fallback/display (approximate from bounding box)
     front: lotWidth,
     upperRight: Math.round(lotDepth*0.5),
@@ -603,6 +985,7 @@ function sitemapApplyToMassing(){
     ],
     parkPrice:60000,lockerPrice:8000,parkRatio:0.3,lockerRatio:0.56,
     landPrice:10000000,lttRate:0.025,ddCost:350000,
+    efficiency:0.80,
     hc:{shoring:18,structure:68,envelope:85,mech:38,elec:22,fitResi:55,fitComm:12,commShell:8,elevators:6,siteWorks:5,parking:28,groceryTI:4.5},
     sc:{ae:0.065,pm:0.03,legal:0.015,insurance:0.012,marketing:0.04,permits:0.008,contingency:0.105},
     dcPerUnit:45000,dcCommPerSF:44,s37PerUnit:7300,parkland:2200000,
@@ -624,48 +1007,102 @@ function sitemapApplyToMassing(){
   switchTab('massing');
 }
 
+/**
+ * Syncs the drawn lot + map-placed volumes to 3D massing without throwing
+ * away existing settings. Called from the SYNC TO 3D PREVIEW button.
+ */
+function smSyncTo3D(){
+  if(!smLotData){alert('Draw a lot first');return;}
+  if(typeof smVolumes === 'undefined' || !Array.isArray(smVolumes) || smVolumes.length===0){
+    alert('Add at least one building volume');return;
+  }
+
+  // Apply lot polygon to massing — convert GPS verts to local feet (origin = north-most vertex)
+  const verts = smLotData.vertices;
+  let originIdx = 0;
+  verts.forEach((v,i)=>{ if(v[1] > verts[originIdx][1]) originIdx = i; });
+  const originLng = verts[originIdx][0], originLat = verts[originIdx][1];
+
+  const polyVerts = verts.map(v => {
+    const xM = turf.distance(turf.point([originLng,originLat]), turf.point([v[0],originLat]), {units:'meters'});
+    const xFt = xM * 3.28084 * (v[0] > originLng ? 1 : -1);
+    const zM = turf.distance(turf.point([originLng,originLat]), turf.point([originLng,v[1]]), {units:'meters'});
+    const zFt = zM * 3.28084 * (v[1] < originLat ? 1 : -1);
+    return [Math.round(xFt), Math.round(zFt)];
+  });
+
+  // Ensure CCW winding
+  let crossSum = 0;
+  for(let i=0; i<polyVerts.length; i++){
+    const j = (i+1) % polyVerts.length;
+    crossSum += (polyVerts[j][0] - polyVerts[i][0]) * (polyVerts[j][1] + polyVerts[i][1]);
+  }
+  if(crossSum < 0) polyVerts.reverse();
+
+  const allX = polyVerts.map(v=>v[0]), allZ = polyVerts.map(v=>v[1]);
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minZ = Math.min(...allZ), maxZ = Math.max(...allZ);
+
+  P._gpsOrigin = {lng: originLng, lat: originLat};
+
+  // Capture neighbouring building footprints while tiles are loaded
+  smCaptureContextBuildings();
+
+  P.lot = {
+    polyVerts: polyVerts,
+    gpsOrigin: {lng: originLng, lat: originLat},
+    front: maxX - minX,
+    upperRight: Math.round((maxZ - minZ) * 0.5),
+    stepEast: 0,
+    lowerRight: Math.round((maxZ - minZ) * 0.5),
+    upperLeft: Math.round((maxZ - minZ) * 0.7),
+    notchWest: 0,
+    lowerLeft: Math.round((maxZ - minZ) * 0.3),
+    rear: maxX - minX
+  };
+
+  // Convert each map-placed volume to a 3D massing volume (preserve freeform polygons)
+  P.vols = smVolumes.map(sv => {
+    const xM = turf.distance(turf.point([originLng,originLat]), turf.point([sv.lngLat[0],originLat]), {units:'meters'});
+    const xFt = xM * 3.28084 * (sv.lngLat[0] > originLng ? 1 : -1);
+    const zM = turf.distance(turf.point([originLng,originLat]), turf.point([originLng,sv.lngLat[1]]), {units:'meters'});
+    const zFt = zM * 3.28084 * (sv.lngLat[1] < originLat ? 1 : -1);
+    const startEg = Math.max(0, Math.round(zFt - sv.depthFt/2));
+    const rightEdge = Math.round(xFt + sv.widthFt/2);
+    const offEast = Math.max(0, Math.round(maxX - rightEdge));
+
+    let localPoly = null;
+    if(sv.customPoly && sv.customPoly.length >= 4){
+      localPoly = sv.customPoly.map(coord => {
+        const pxM = turf.distance(turf.point([originLng,originLat]), turf.point([coord[0],originLat]), {units:'meters'});
+        const pxFt = pxM * 3.28084 * (coord[0] > originLng ? 1 : -1);
+        const pzM = turf.distance(turf.point([originLng,originLat]), turf.point([originLng,coord[1]]), {units:'meters'});
+        const pzFt = pzM * 3.28084 * (coord[1] < originLat ? 1 : -1);
+        return [Math.round(pxFt), Math.round(pzFt)];
+      });
+    }
+
+    return {
+      storeys: sv.storeys, startEg: startEg, depth: sv.depthFt, width: sv.widthFt,
+      offEast: offEast, commGF: sv.commGF, color: sv.color, name: sv.name, angle: sv.angle,
+      windows: sv.windows || 1, winSpacing: sv.winSpacing || 3,
+      balconies: (sv.balcFront || sv.balcBack || sv.balcLeft || sv.balcRight) ? 1 : 0,
+      balcEvery: sv.balcEvery || 2, balcDepth: sv.balcDepth || 4,
+      balcFront: sv.balcFront, balcBack: sv.balcBack, balcLeft: sv.balcLeft, balcRight: sv.balcRight,
+      customPolyLocal: localPoly,
+      customAreaSF: sv.customAreaSF || 0
+    };
+  });
+
+  // Refresh panels + 3D, then jump to the Massing tab
+  try { if(typeof buildLotPanel === 'function') buildLotPanel(); } catch(e){}
+  try { if(typeof buildSetbackPanel === 'function') buildSetbackPanel(); } catch(e){}
+  try { if(typeof buildFloorPanel === 'function') buildFloorPanel(); } catch(e){}
+  try { if(typeof buildVolPanel === 'function') buildVolPanel(); } catch(e){}
+  try { rebuildAll(); } catch(e){ console.warn('rebuildAll err:', e); }
+  try { if(typeof switchTab === 'function') switchTab('massing'); } catch(e){}
+}
+
 
 //  MAP-BASED MASSING — place/drag/rotate volumes on satellite
-// ═══════════════════════════════════════════════════════════
-let smVolumes=[];
-let smVolNextId=1;
-let smSelectedVolId=null; // for keyboard rotation
-const smVolColors=['#5588bb','#77aa99','#aa7788','#8877aa','#bb8855','#55aa77','#aa5577','#7788bb'];
-
-// Keyboard: Shift+Arrow to rotate selected volume
-document.addEventListener('keydown',(e)=>{
-  if(!smSelectedVolId||!e.shiftKey)return;
-  const vol=smVolumes.find(v=>v.id===smSelectedVolId);
-  if(!vol)return;
-  let step=e.ctrlKey?1:5; // Ctrl+Shift = 1°, Shift = 5°
-  if(e.key==='ArrowLeft'){vol.angle=(vol.angle-step+360)%360;e.preventDefault();}
-  else if(e.key==='ArrowRight'){vol.angle=(vol.angle+step)%360;e.preventDefault();}
-  else return;
-  if(vol.shapeType){
-    smRegenerateShapePoly(vol);
-    smConformEdges(vol);
-    smUpdateShapeGeo(vol);
-    if(_smShapeEditId===vol.id) smRepositionResizeHandles(vol);
-  }
-  smDrawVolume(vol);
-  smRenderVolPanel();
-  smAutoSync();
-});
-// Close shape menu on outside click
-document.addEventListener('click',(e)=>{
-  if(_smShapeMenuOpen&&!e.target.closest('#shape-builder-wrap')){
-    _smShapeMenuOpen=false;
-    const m=document.getElementById('sm-shape-menu');if(m)m.style.display='none';
-  }
-});
-
-// ── Polygon drawing mode for freeform building footprints ──
-let smBldgDrawing=false;
-let smBldgDrawPts=[];
-let smBldgDrawMarkers=[];
-let smBldgDrawLine=null;
-
-/**
- * Enters building-footprint drawing mode on the site map, allowing the user
- * to click vertices that define a building polygon with edge-snapping to the lot.
- */
+// ══════════════════════

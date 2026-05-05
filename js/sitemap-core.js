@@ -58,6 +58,29 @@ function toggleSec(id){
   const bd=sec.querySelector('.sec-bd');
   hd.classList.toggle('collapsed');
   bd.classList.toggle('hidden');
+  // Auto-run analysis calculators when the section opens so users see
+  // results immediately without clicking "calculate" — keeps tools live
+  // and tied to the rendered model.
+  if(!bd.classList.contains('hidden')){
+    const autoCalc={
+      'sec-applications':'calcApplications',
+      'sec-tripgen':'calcTripParking',
+      'sec-shadow':'calcShadow',
+      'sec-iz':'calcInclusionaryZoning',
+      'sec-walkability':'calcWalkability',
+      'sec-watercap':'calcWaterCapacity',
+      'sec-stormwater':'calcStormwater',
+      'sec-servicing':'calcServicing',
+      'sec-geotech':'calcGeotech',
+      'sec-dc-breakdown':'calcDCBreakdown',
+      'sec-cbc':'calcCBC',
+      'sec-ltt':'calcLTT'
+    };
+    const fnName=autoCalc[id];
+    if(fnName && typeof window[fnName]==='function'){
+      try { window[fnName](); } catch(e){ console.warn('[toggleSec] auto-calc failed for '+id+':',e); }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -66,8 +89,55 @@ function toggleSec(id){
 initThree();
 console.log('%c[EstateBuilder v4.0-ENGINE] Loaded — MAT palette + mk() + addCurtainWall(opts) + addBalconyUnit','color:#AEBC46;font-weight:bold;font-size:12px');
 
-// Auto-load last session (before building panels)
+// Auto-load last session (before building panels). Records result on
+// window._autoLoadResult so we can tell the user after panels render.
 autoLoad();
+
+// Sync efficiency sliders to the loaded P.pf.efficiency value (no recalc needed —
+// pfCalc reads P.pf.efficiency directly when the pro-forma renders).
+try {
+  const _eff = (P.pf && P.pf.efficiency != null) ? P.pf.efficiency : 0.80;
+  const _pct = Math.round(Math.min(1, Math.max(0, _eff)) * 100);
+  ['eff-slider-massing','eff-slider-pf'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.value = _pct;
+  });
+  ['eff-val-massing','eff-val-pf'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.textContent = _pct + '%';
+  });
+} catch(e){}
+
+// Initialize the SITE MAP undo button's enabled/disabled state from the
+// autosave history. Updates again automatically on every subsequent autosave.
+try { if(typeof _updateUndoBtnState === 'function') _updateUndoBtnState(); } catch(e){}
+
+// Sync the stepback slider to whatever the first podium-bearing volume has.
+// New projects start at 5ft (the new default) until OPTIMAL MASSING runs.
+try {
+  let _stepFt = 5;
+  if(P.vols && P.vols.length > 0){
+    const _v = P.vols.find(v => (v.podiumStoreys || 0) > 0 && (v.stepbackAmt || 0) > 0);
+    if(_v) _stepFt = Math.max(0, Math.min(15, Math.round(_v.stepbackAmt)));
+  }
+  const _slEl = document.getElementById('stepback-slider');
+  if(_slEl) _slEl.value = _stepFt;
+  const _lblEl = document.getElementById('stepback-val');
+  if(_lblEl) _lblEl.textContent = _stepFt + ' ft';
+} catch(e){}
+// Defer the toast until UI is rendered so the save-status element exists
+setTimeout(function(){
+  try {
+    const r = window._autoLoadResult;
+    if(!r) return;
+    if(r.source === 'primary' && (P.vols && P.vols.length > 0)){
+      showSaveStatus('↶ Restored last session — '+P.vols.length+' volume'+(P.vols.length===1?'':'s'), '#6a6');
+    } else if(r.source === 'backup'){
+      const when = r.savedAt ? new Date(r.savedAt).toLocaleString() : 'earlier';
+      showSaveStatus('↶ Primary save was unreadable — recovered from backup ('+when+')', '#e8c87a');
+    }
+  } catch(e){}
+}, 300);
 
 // Build all panels from (possibly restored) state
 buildLotPanel();
@@ -160,6 +230,7 @@ function initSiteMap(){
   });
 }
 
+
 function smRestoreSavedPolygons(){
   if(!smMap)return;
   // Restore lot polygon from saved GPS vertices
@@ -236,4 +307,3 @@ function smRestoreSavedPolygons(){
     setTimeout(()=>{try{initSiteMap();}catch(e){console.warn('Auto-connect failed:',e);}},500);
   }
 })();
-

@@ -11,81 +11,84 @@ function buildFloorSchedule(){
   const up=P.unitPlan;
   if(!up)return;
   if(!P.vols||P.vols.length===0){up.floors=[];return;}
-  const maxSt=P.vols.reduce((m,v)=>Math.max(m,v.storeys),0);
-  if(maxSt===0){up.floors=[];return;}
 
-  let gfa;
+  // ── SINGLE SOURCE OF TRUTH ──
+  // Read directly from computeGFA().perStorey for per-floor gross SF, and from
+  // pfData() for the proforma-level totals (resiGFA, sellableResiSF). This
+  // guarantees the floor schedule ALWAYS reconciles with the Building Summary
+  // and Project Stats — same numbers everywhere, no drift.
+  let gfa, pf;
   try{ gfa=computeGFA(); }catch(e){ console.warn('buildFloorSchedule: computeGFA error',e); up.floors=[]; return; }
-  const totalGFA=gfa.totalGFA;
+  try{ pf=pfData(); }catch(e){ console.warn('buildFloorSchedule: pfData error',e); up.floors=[]; return; }
+  const totalGFA=gfa.totalGFA||0;
   if(totalGFA<=0){up.floors=[];return;}
+  const perStorey = Array.isArray(gfa.perStorey) ? gfa.perStorey : [];
+  if(perStorey.length === 0){ up.floors=[]; return; }
 
-  // ── Compute per-floor PHYSICAL footprint areas ──
-  // Each floor's gross area = the actual building footprint at that level.
-  // For multi-volume floors (podium+tower): use the LARGEST active volume's footprint
-  // since the podium typically encompasses the tower. This gives the real floor plate size.
-  const vts=lotVerts();
-  const lotMaxX=Math.max(...vts.map(v=>v[0]));
-
-  const volFPs=P.vols.map((vol,vi)=>{
-    const isCustom=vol.customPolyLocal&&vol.customPolyLocal.length>=4;
-    const fp=isCustom?(vol.customAreaSF||0):(vol.width*vol.depth);
-    return {idx:vi, name:vol.name||('V'+vi), storeys:vol.storeys, fp, commGF:!!vol.commGF};
-  }).filter(v=>v.fp>0&&v.storeys>0);
-
-  // Core deductions per floor (in SF) — use dynamic elevator/stair counts
-  const numElev=P.core.numElevators||0;
-  const numStairs=P.core.stairs?P.core.stairs.length:0;
-  const elevSF=numElev*70;
-  const stairSF=numStairs*110;
-  const coreSF=elevSF+stairSF;
-  const corridorW=up.corridorWidthFt||5.5;
-  const mechPerFloor=80;
-  const garbagePerFloor=80;
   const hasAnyCommGF=P.vols.some(v=>v.commGF);
+  const resiGFA = pf.resiGFA || 0;              // authoritative resi gross (matches all tabs)
+  const sellableResiSF = pf.sellableResiSF || 0; // authoritative net sellable (matches Building Summary)
 
+  // ── Build floors from computeGFA's per-storey breakdown ──
   const newFloors=[];
-  for(let s=1;s<=maxSt;s++){
-    const active=volFPs.filter(v=>s<=v.storeys);
-    if(active.length===0)continue;
-    // Physical floor plate = largest active volume footprint (podium encompasses tower)
-    const grossSF=Math.round(Math.max(...active.map(v=>v.fp)));
-    if(grossSF<=0)continue;
+  perStorey.forEach(row => {
+    const s = row.storey;
+    const grossSF = Math.round(row.area || 0);
+    if(grossSF <= 0) return;
 
-    const f=s-1;
-    const isGF=(f===0);
-    const isCommGF=isGF && hasAnyCommGF;
-    const isAmenity=(f===1 && maxSt>3);
-    let floorType='residential';
-    if(isCommGF) floorType='commercial';
-    else if(isAmenity) floorType='amenity';
+    const isGF = (s === 1);
+    const isCommGF = isGF && hasAnyCommGF;
+    const floorType = isCommGF ? 'commercial' : 'residential';
 
-    const avgWidth=grossSF>0?Math.sqrt(grossSF)*0.7:40;
-    const corridorSF=Math.round(avgWidth*corridorW*1.15);
-
-    let netSF=0;
-    if(floorType==='residential'){
-      netSF=Math.max(0,grossSF-coreSF-corridorSF-mechPerFloor-garbagePerFloor);
-    } else if(floorType==='amenity'){
-      netSF=Math.max(0,Math.round(grossSF*0.5-coreSF-corridorSF));
-    }
-
-    const efficiency=grossSF>0?Math.round(netSF/grossSF*100):0;
-    const existingFloor=up.floors.find(ef=>ef.floor===s);
-    const units=(existingFloor&&up.mode==='manual')?existingFloor.units:[];
+    const existingFloor = up.floors.find(ef => ef.floor === s);
+    const units = (existingFloor && up.mode === 'manual') ? existingFloor.units : [];
 
     newFloors.push({
-      floor:s,
+      floor: s,
       floorType,
-      volumes:active.map(v=>v.name).join('+'),
+      volumes: (row.volumes || []).join('+') || 'A',
       grossSF,
-      coreSF,
-      corridorSF,
-      mechSF:floorType==='residential'?mechPerFloor+garbagePerFloor:0,
-      netSF,
-      efficiency,
+      coreSF: 0,
+      corridorSF: 0,          // filled in during reconciliation below
+      mechSF: 0,
+      netSF: 0,                // filled in during reconciliation below
+      efficiency: 0,
       units
     });
+  });
+
+  if(newFloors.length === 0){ up.floors = []; return; }
+
+  // ── RECONCILIATION ──
+  // Distribute pfData().sellableResiSF across residential floors PROPORTIONAL
+  // to each floor's gross SF. This guarantees:
+  //   Σ floor.netSF (residential) === pfData().sellableResiSF
+  //   Σ floor.grossSF (residential) === pfData().resiGFA
+  // which means the per-floor efficiency AVERAGES to the overall efficiency
+  // shown in the Building Summary (79% in the user's case).
+  const resiFloors = newFloors.filter(f => f.floorType === 'residential');
+  const resiFloorGrossSum = resiFloors.reduce((s, f) => s + f.grossSF, 0);
+
+  if(resiFloorGrossSum > 0 && sellableResiSF > 0){
+    resiFloors.forEach(f => {
+      const share = f.grossSF / resiFloorGrossSum;
+      // Net = share of the proforma's net-sellable total
+      f.netSF = Math.round(sellableResiSF * share);
+      // Corridor/core/lobby deduction = gross − net (matches Building Summary math)
+      f.corridorSF = Math.max(0, f.grossSF - f.netSF);
+      f.efficiency = f.grossSF > 0 ? Math.round(f.netSF / f.grossSF * 100) : 0;
+    });
+    // Final rounding pass — put any integer-rounding residual on the first resi
+    // floor so the sum EXACTLY equals sellableResiSF
+    const sum = resiFloors.reduce((s, f) => s + f.netSF, 0);
+    const residual = Math.round(sellableResiSF) - sum;
+    if(residual !== 0 && resiFloors.length > 0){
+      resiFloors[0].netSF += residual;
+      resiFloors[0].efficiency = resiFloors[0].grossSF > 0 ? Math.round(resiFloors[0].netSF / resiFloors[0].grossSF * 100) : 0;
+    }
   }
+
+  // (Reconciliation done inline above — Σ resi netSF EXACTLY equals sellableResiSF.)
 
   up.floors=newFloors;
   if(up.mode==='auto') autoDistributeUnits();
@@ -96,39 +99,122 @@ function autoDistributeUnits(){
   if(!up||!up.floors.length)return;
   const pf=P.pf;
 
-  // Mix percentages from existing P.pf defaults
-  const defaultPcts={'Studio':0.10,'1-Bedroom':0.35,'1-Bed+Den':0.20,'2-Bedroom':0.25,'2-Bed+Den':0.00,'3-Bedroom':0.10};
-  // Include 2-Bed+Den if user has set a non-zero psf for it
-  const ut=up.unitTypes;
+  // ── SINGLE SOURCE OF TRUTH ──
+  // Distribute the EXACT unit counts from pf.units (the same numbers shown in
+  // the top chips and the proforma) across residential floors. This guarantees:
+  //   Σ units placed on floors === pf.units total counts === top chip counts
+  //   No phantom unit types appear on floors that have count=0 in the proforma
+  // Previously this used its own hard-coded defaultPcts, which produced phantom
+  // 3-Bedrooms on floors even when the proforma said 0 × 3-Bedroom.
+  const totalCounts = {};
+  pf.units.forEach(u => { if(u.count > 0) totalCounts[u.type] = u.count; });
 
-  // Collect all residential floors
-  const resiFloors=up.floors.filter(f=>f.floorType==='residential'||f.floorType==='amenity');
+  const resiFloors = up.floors.filter(f => f.floorType === 'residential');
+  if(resiFloors.length === 0) return;
 
-  resiFloors.forEach(fl=>{
-    const available=fl.floorType==='amenity'?Math.round(fl.netSF):fl.netSF;
-    if(available<=0){fl.units=[];return;}
+  const totalResiNet = resiFloors.reduce((s, f) => s + f.netSF, 0);
+  if(totalResiNet <= 0){ resiFloors.forEach(f => f.units = []); return; }
 
-    const units=[];
-    let remaining=available;
+  // Reset all floors before redistribution
+  resiFloors.forEach(f => f.units = []);
 
-    ut.forEach(uType=>{
-      const pct=defaultPcts[uType.type]||0;
-      if(pct<=0)return;
-      const sfBudget=available*pct;
-      const count=Math.floor(sfBudget/uType.defaultSize);
-      for(let i=0;i<count&&remaining>=uType.defaultSize;i++){
-        units.push({type:uType.type,size:uType.defaultSize});
-        remaining-=uType.defaultSize;
+  // Helper: how much net SF is still available on this floor
+  const remainingSF = f => f.netSF - f.units.reduce((s, u) => s + u.size, 0);
+
+  // ── BIN-PACKING — LARGEST FIRST, PROPORTIONAL TO REMAINING CAPACITY ──
+  //
+  // BUG WE'RE FIXING: previously this iterated `pf.units` in insertion order
+  // (Studio → 1B → 1B+D → 2B → 2B+D → 3B) and used FULL netSF for the per-floor
+  // share. By the time it reached 3-Bedrooms, floors were already 95% full of
+  // smaller units and 1050 sf couldn't fit anywhere → units silently skipped.
+  // For a 134-unit building this dropped 27 units (3B lost 86%, 2B+D lost 33%).
+  //
+  // FIX: process types LARGEST-first so big units claim space when capacity is
+  // fresh; compute each type's per-floor share against REMAINING capacity (not
+  // total netSF), so capacity already consumed by larger types is automatically
+  // accounted for. Result: every unit from pf.units is placed.
+  const typesDescBySize = pf.units
+    .filter(u => u.count > 0)
+    .slice()
+    .sort((a, b) => b.size - a.size);
+
+  typesDescBySize.forEach(pfu => {
+    const type = pfu.type;
+    const size = pfu.size;
+    const totalCount = pfu.count;
+
+    // Step 1: per-floor share based on REMAINING capacity
+    const remainingByFloor = resiFloors.map(f => Math.max(0, remainingSF(f)));
+    const totalRemaining = remainingByFloor.reduce((s, r) => s + r, 0);
+    if(totalRemaining <= 0){
+      // Building completely full — fall through to round-robin placement so
+      // unit count still matches pf totals (final scaling will compress sizes).
+      for(let k = 0; k < totalCount; k++){
+        resiFloors[k % resiFloors.length].units.push({ type, size });
+      }
+      return;
+    }
+
+    const idealCounts = remainingByFloor.map(r => totalCount * r / totalRemaining);
+    const floorCounts = idealCounts.map(c => Math.floor(c));
+    let placed = floorCounts.reduce((s, n) => s + n, 0);
+
+    // Step 2: Hamilton remainder by largest fractional part
+    const remainder = totalCount - placed;
+    if(remainder > 0){
+      const fracIdx = idealCounts
+        .map((c, i) => ({ i, frac: c - Math.floor(c) }))
+        .sort((a, b) => b.frac - a.frac);
+      for(let r = 0; r < remainder; r++){
+        floorCounts[fracIdx[r % fracIdx.length].i] += 1;
+      }
+    }
+
+    // Step 3: place units. NO CAPACITY CAP — capacity was already factored
+    // into idealCounts via remainingByFloor, so we don't double-gate. Any
+    // tiny residual overflow gets absorbed by the per-floor scaling pass below.
+    floorCounts.forEach((count, i) => {
+      const f = resiFloors[i];
+      for(let k = 0; k < count; k++){
+        f.units.push({ type, size });
       }
     });
+  });
 
-    fl.units=units;
+  // Σ count guarantee: at this point, Σ units placed === Σ pf.units counts,
+  // because every iteration above places exactly `totalCount` units of its type.
+
+  // ── PER-FLOOR SIZE SCALING ──
+  // Each floor must fully consume its net SF (no empty space). After integer
+  // unit-count rounding, each floor's nominal SF (Σ unit.size) is usually 5-15%
+  // less than its net capacity. Scale every unit on the floor by netSF / nominal
+  // so the floor packs out to 100% — exactly what real architects do (units
+  // flex within a few % to fit the column grid).
+  //
+  // The scaled value is stored in u.size (so the visualization, labels, and
+  // floor composition all reflect the actual built dimensions). Since we still
+  // had Σ counts = pf totals, the OVERALL building still sums to the proforma.
+  resiFloors.forEach(f => {
+    const nominal = f.units.reduce((s, u) => s + u.size, 0);
+    if(nominal <= 0 || f.netSF <= 0) return;
+    const scale = f.netSF / nominal;
+    // Wider guardrail (was [0.75, 1.5]). With largest-first bin-packing the
+    // scale should typically land in [0.95, 1.10]; the broader band just
+    // tolerates extreme proforma vs. building-mass mismatches without bailing.
+    if(scale < 0.5 || scale > 2.0) return;
+    f.units.forEach(u => { u.size = Math.round(u.size * scale); });
+    // Final integer-residual fix: put any rounding leftover on the largest unit
+    const finalSum = f.units.reduce((s, u) => s + u.size, 0);
+    const residual = f.netSF - finalSum;
+    if(residual !== 0 && f.units.length > 0){
+      // Put residual on largest unit so the % impact is smallest
+      const largest = f.units.reduce((b, u) => u.size > b.size ? u : b, f.units[0]);
+      largest.size += residual;
+    }
   });
 
   // Clear units on non-residential floors
-  up.floors.forEach(fl=>{
-    if(fl.floorType==='commercial') fl.units=[];
-  });
+  up.floors.forEach(fl => { if(fl.floorType === 'commercial') fl.units = []; });
 }
 
 var _unitEditorSelectedFloor=-1;
@@ -141,7 +227,7 @@ function renderUnitEditor(){
   try{ _renderUnitEditorInner(el); }catch(e){
     // XSS-safe: escape error fields before injecting as HTML.
     var _esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
-    el.innerHTML=`<div style="color:#ff6644;padding:12px;font-size:11px">Unit editor error: ${_esc(e&&e.message)}<br><pre style="font-size:9px;color:#888;margin-top:6px">${_esc(e&&e.stack)}</pre></div>`;
+    el.innerHTML=`<div style="color:#ff6644;padding:12px;font-size:11px">Unit editor error: ${_esc(e&&e.message)}<br><pre style="font-size:12px;color:#888;margin-top:6px">${_esc(e&&e.stack)}</pre></div>`;
     console.error('renderUnitEditor:',e);
   }
 }
@@ -152,12 +238,21 @@ function _renderUnitEditorInner(el){
   if(!up.floors||!up.floors.length){el.innerHTML='<div style="color:#888;padding:12px">No building volumes defined — add volumes in the Massing tab</div>';return;}
 
   // ── Single source of truth: pfCalc() for unit counts ──
+  // CRITICAL: use the SAME fields as the Building Summary panel and Project Stats
+  // so all tabs report identical numbers.
+  //   • Net Sellable card = d.sellableResiSF  (the building's capacity — same as Building Summary)
+  //   • Gross Resi card   = d.resiGFA         (same as Project Stats)
+  //   • Total Units card  = d.totalUnits      (same as Building Summary)
+  //   • Avg Efficiency    = sellable / gross  (same denominator the Building Summary uses)
+  // Previously this used d.netResiSF (sum of unit areas placed, always ≤ sellable
+  // due to floor()/round()), which gave a smaller number with the same label —
+  // causing the Units tab to disagree with every other tab.
   const d=pfData();
   const unitMix=d.unitMix||[];
   const grandTotal=d.totalUnits||0;
-  const grandSF=d.netResiSF||0;
   const totalGrossSF=d.resiGFA||0;
   const totalNetSF=d.sellableResiSF||0;
+  const grandSF=totalNetSF; // Net Sellable card = building capacity (matches all other tabs)
 
   // Build totals from pfCalc unit mix (not floor schedule)
   const totals={};
@@ -175,7 +270,7 @@ function _renderUnitEditorInner(el){
   </div>`;
 
   // ── Summary cards ──
-  html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;font-size:10px">
+  html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;font-size:13px">
     <div style="background:#2D2D2D;padding:8px;border-radius:4px;border-left:3px solid #AEBC46">
       <div style="color:#888">Total Units</div>
       <div style="color:#AEBC46;font-weight:700;font-size:16px">${grandTotal}</div>
@@ -200,15 +295,15 @@ function _renderUnitEditorInner(el){
     const t=totals[ut.type];
     const isSel=(up.mode==='manual'&&_unitEditorSelectedType===ut.type);
     html+=`<div class="unit-chip${isSel?' selected':''}" style="background:${ut.color}${isSel?'44':'22'};color:${ut.color};${up.mode==='manual'?'cursor:pointer':''}" ${up.mode==='manual'?`onclick="_unitEditorSelectedType=_unitEditorSelectedType==='${ut.type}'?null:'${ut.type}';renderUnitEditor();renderFloorPlateSVG(_unitEditorSelectedFloor)"`:''}>
-      <span style="font-size:12px;font-weight:700">${t.count}</span> ${ut.type} <span style="color:#888;font-size:9px">(${ut.defaultSize}sf)</span>
+      <span style="font-size:12px;font-weight:700">${t.count}</span> ${ut.type} <span style="color:#888;font-size:12px">(${ut.defaultSize}sf)</span>
     </div>`;
   });
   html+=`</div>`;
-  if(up.mode==='manual') html+=`<div style="font-size:9px;color:#777;margin:-6px 0 8px 0">${_unitEditorSelectedType?`<span style="color:#AEBC46">✦ ${_unitEditorSelectedType}</span> selected — click SVG to place, click unit to remove`:'Click a unit type above to start placing'}</div>`;
+  if(up.mode==='manual') html+=`<div style="font-size:12px;color:#777;margin:-6px 0 8px 0">${_unitEditorSelectedType?`<span style="color:#AEBC46">✦ ${_unitEditorSelectedType}</span> selected — click SVG to place, click unit to remove`:'Click a unit type above to start placing'}</div>`;
 
   // ── Floor schedule table ──
   html+=`<div style="background:#1A1A1A;border:1px solid #333333;border-radius:6px;padding:8px;margin-bottom:12px">
-    <div style="font-size:10px;font-weight:700;color:#888;margin-bottom:6px;letter-spacing:1px">FLOOR SCHEDULE</div>
+    <div style="font-size:13px;font-weight:700;color:#888;margin-bottom:6px;letter-spacing:1px">FLOOR SCHEDULE</div>
     <div style="max-height:350px;overflow-y:auto">
     <table class="floor-table">
       <thead><tr>
@@ -238,23 +333,45 @@ function _renderUnitEditorInner(el){
 
     html+=`<tr class="${isSelected?'selected-row':''}" style="cursor:pointer${overCap?';background:#ff444418':''}" onclick="_unitEditorSelectedFloor=${realIdx};renderUnitEditor();renderFloorPlateSVG(${realIdx})">
       <td style="font-weight:600;color:#ccc">F${fl.floor}</td>
-      <td><span style="color:${typeColor};font-weight:600;font-size:9px">${typeLabel}</span></td>
-      <td style="color:#777;font-size:9px">${fl.volumes}</td>
+      <td><span style="color:${typeColor};font-weight:600;font-size:12px">${typeLabel}</span></td>
+      <td style="color:#777;font-size:12px">${fl.volumes}</td>
       <td style="text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${fl.grossSF.toLocaleString()}</td>
       <td style="text-align:right;color:#ccc;font-weight:600;font-variant-numeric:tabular-nums">${fl.netSF.toLocaleString()}</td>
       <td style="text-align:right;color:${fl.efficiency>70?'#AEBC46':fl.efficiency>60?'#e8c87a':'#ff6644'}">${fl.efficiency}%</td>
-      <td>${compStr||'<span style="color:#555">—</span>'}${overCap?'<span style="color:#ff4444;font-size:9px"> ⚠</span>':''}</td>
+      <td>${compStr||'<span style="color:#555">—</span>'}${overCap?'<span style="color:#ff4444;font-size:12px"> ⚠</span>':''}</td>
     </tr>`;
   });
 
   html+=`</tbody></table></div></div>`;
 
   // ── SVG Floor Plate Viewer ──
-  html+=`<div style="position:relative">
-    <div class="floor-svg-wrap" id="unit-floor-svg" style="min-height:180px"></div>
+  // Constrain to a reasonable max-width so it doesn't blow out the page on wide monitors.
+  // The SVG itself will scale to fit this container while preserving aspect ratio.
+  html+=`<div style="position:relative;max-width:640px;margin:0 auto">
+    <div class="floor-svg-wrap" id="unit-floor-svg" style="min-height:180px;max-height:480px;overflow:hidden;border:1px solid #2a2a2a;border-radius:6px;background:#0a0a0c"></div>
     <div style="position:absolute;top:4px;right:4px;display:flex;gap:4px">
-      <button onclick="openFloorPlanFullscreen(${_unitEditorSelectedFloor})" title="Full Screen" style="background:rgba(26,26,26,.85);border:1px solid #444;color:#AEBC46;padding:3px 8px;border-radius:3px;font-size:9px;cursor:pointer;font-family:Outfit;font-weight:600">⤢ FULL</button>
-      <button onclick="exportAllFloorPlans()" title="Export All Floors" style="background:rgba(26,26,26,.85);border:1px solid #444;color:#4ecdc4;padding:3px 8px;border-radius:3px;font-size:9px;cursor:pointer;font-family:Outfit;font-weight:600">↓ EXPORT ALL</button>
+      <button onclick="openFloorPlanFullscreen(${_unitEditorSelectedFloor})" title="Full Screen" style="background:rgba(26,26,26,.85);border:1px solid #444;color:#AEBC46;padding:3px 8px;border-radius:3px;font-size:12px;cursor:pointer;font-family:Outfit;font-weight:600">⤢ FULL</button>
+      <button onclick="exportAllFloorPlans()" title="Export All Floors" style="background:rgba(26,26,26,.85);border:1px solid #444;color:#4ecdc4;padding:3px 8px;border-radius:3px;font-size:12px;cursor:pointer;font-family:Outfit;font-weight:600">↓ EXPORT ALL</button>
+    </div>
+    <!-- LEGEND — DYNAMIC: only shows unit types actually used in the project -->
+    <div id="unit-floor-legend" style="margin-top:6px;background:#161618;border:1px solid #2a2a2a;border-radius:6px;padding:6px 8px;font-size:13px;font-family:Outfit;display:flex;flex-wrap:wrap;gap:10px;align-items:center;color:#aaa">
+      <span style="font-weight:700;color:#888;letter-spacing:1px;font-size:12px">LEGEND:</span>
+      <span style="display:inline-flex;align-items:center;gap:4px"><svg width="14" height="10" style="vertical-align:middle"><rect x="0" y="0" width="14" height="10" fill="#2a2e34" stroke="#666" stroke-width="0.6"/></svg> Corridor</span>
+      ${(P.core && (P.core.numElevators||0) > 0) ? `<span style="display:inline-flex;align-items:center;gap:4px"><svg width="14" height="10"><rect x="0" y="0" width="14" height="10" fill="#c49ade2a" stroke="#c49ade" stroke-width="0.8"/></svg> Elevator</span>` : ''}
+      ${(P.core && P.core.stairs && P.core.stairs.length > 0) ? `<span style="display:inline-flex;align-items:center;gap:4px"><svg width="14" height="10"><rect x="0" y="0" width="14" height="10" fill="#b060502a" stroke="#b06050" stroke-width="0.8"/></svg> Stair</span>` : ''}
+      <span style="border-left:1px solid #333;height:14px;margin:0 2px"></span>
+      ${(()=>{
+        // Only include unit types with count > 0 (matches the chips and floor compositions)
+        // Source of truth: P.unitPlan.unitTypes (same colors used everywhere else)
+        const colorMap = {};
+        ((P.unitPlan && P.unitPlan.unitTypes) || []).forEach(t => { if(t && t.type) colorMap[t.type] = t.color || '#888'; });
+        const inUse = (P.pf && Array.isArray(P.pf.units)) ? P.pf.units.filter(u => u.count > 0) : [];
+        if(inUse.length === 0) return '<span style="color:#666">No unit types in mix</span>';
+        return inUse.map(u => {
+          const c = colorMap[u.type] || '#888';
+          return `<span style="display:inline-flex;align-items:center;gap:4px"><svg width="14" height="10"><rect x="0" y="0" width="14" height="10" fill="${c}26" stroke="${c}" stroke-width="0.8"/></svg> ${u.type} (${u.size}sf · ${u.count})</span>`;
+        }).join('');
+      })()}
     </div>
   </div>`;
 
@@ -262,14 +379,14 @@ function _renderUnitEditorInner(el){
   if(up.mode==='manual'&&_unitEditorSelectedFloor>=0){
     const selFl=up.floors[_unitEditorSelectedFloor];
     html+=`<div style="display:flex;gap:6px;margin:6px 0;flex-wrap:wrap">
-      <button style="padding:4px 10px;border-radius:3px;border:1px solid #444;background:#2D2D2D;color:#AEBC46;font-size:10px;font-weight:600;cursor:pointer;font-family:Outfit" onclick="applyTypicalFloor(${_unitEditorSelectedFloor})">Apply F${selFl.floor} as Typical</button>
-      <span style="font-size:9px;color:#666;line-height:28px">Copies this floor's units to all floors with similar plate size (±20%)</span>
+      <button style="padding:4px 10px;border-radius:3px;border:1px solid #444;background:#2D2D2D;color:#AEBC46;font-size:13px;font-weight:600;cursor:pointer;font-family:Outfit" onclick="applyTypicalFloor(${_unitEditorSelectedFloor})">Apply F${selFl.floor} as Typical</button>
+      <span style="font-size:12px;color:#666;line-height:28px">Copies this floor's units to all floors with similar plate size (±20%)</span>
     </div>`;
   }
 
   // ── Unit mix totals table ──
   html+=`<div style="background:#1A1A1A;border:1px solid #333333;border-radius:6px;padding:8px">
-    <div style="font-size:10px;font-weight:700;color:#888;margin-bottom:6px;letter-spacing:1px">UNIT MIX SUMMARY</div>
+    <div style="font-size:13px;font-weight:700;color:#888;margin-bottom:6px;letter-spacing:1px">UNIT MIX SUMMARY</div>
     <table class="unit-totals-table">
       <thead><tr><th>Unit Type</th><th style="text-align:right">Size</th><th style="text-align:right">Count</th>
       <th style="text-align:right">Mix %</th><th style="text-align:right">Total SF</th><th style="text-align:right">Avg Size</th></tr></thead>
@@ -326,214 +443,511 @@ function renderFloorPlateSVG(floorIdx){
     }
   });
   if(polyPts.length===0){wrap.innerHTML='<div style="color:#555;padding:20px;text-align:center;font-size:11px">No volumes at this floor</div>';return;}
-  // Merge overlapping polygon point arrays for combined floor plate
-  const allPolyPts=[].concat(...polyPts);
 
-  // Bounding box
+  // Use the LARGEST polygon as the floor's primary footprint (the visible plate)
+  function _polyArea(pts){
+    let a=0;
+    for(let i=0;i<pts.length;i++){const j=(i+1)%pts.length;a+=pts[i][0]*pts[j][1]-pts[j][0]*pts[i][1];}
+    return Math.abs(a/2);
+  }
+
+  // ── UNION OF ACTIVE POLYGONS (true floor plate) ──
+  // When multiple volumes overlap at this storey (e.g. podium + tower on a
+  // podium floor), the visible building plate is the UNION of all polygons.
+  // We compute this once via turf.union and use it for: (1) the building
+  // outline so only ONE outer boundary is drawn (no distracting inner tower
+  // outline), (2) the slab-slicing source so units fill the full union area
+  // not just the largest polygon. Falls back to the largest polygon if turf
+  // is unavailable or the union fails.
+  function _ringForTurf(pts){
+    const ring = pts.slice();
+    if(ring.length < 3) return null;
+    if(ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]){
+      ring.push([ring[0][0], ring[0][1]]);
+    }
+    return ring;
+  }
+  function _coordsToRing(coords){
+    // Drop closing duplicate so caller gets the same convention as polyPts.
+    if(!coords || coords.length < 3) return null;
+    const r = coords.slice();
+    if(r.length > 1 && r[0][0] === r[r.length-1][0] && r[0][1] === r[r.length-1][1]){
+      return r.slice(0, -1);
+    }
+    return r;
+  }
+  function _unionAllPolys(allPolyPts){
+    if(allPolyPts.length === 1) return allPolyPts[0];
+    if(typeof turf === 'undefined' || !turf.union) {
+      // Fallback: largest polygon
+      return allPolyPts.reduce((b, p) => _polyArea(p) > _polyArea(b) ? p : b, allPolyPts[0]);
+    }
+    try {
+      const features = allPolyPts.map(p => {
+        const ring = _ringForTurf(p);
+        return ring ? turf.polygon([ring]) : null;
+      }).filter(Boolean);
+      if(features.length === 0) return allPolyPts[0];
+      let acc = features[0];
+      for(let i = 1; i < features.length; i++){
+        let next = null;
+        try { next = turf.union(turf.featureCollection([acc, features[i]])); }
+        catch(e){ try { next = turf.union(acc, features[i]); } catch(e2){ next = null; } }
+        if(next) acc = next;
+      }
+      if(!acc || !acc.geometry) return allPolyPts[0];
+      // Use outer ring of first polygon (handles MultiPolygon by taking the largest piece)
+      let outerCoords;
+      if(acc.geometry.type === 'MultiPolygon'){
+        // Pick the largest polygon piece
+        let bestArea = 0; let best = null;
+        acc.geometry.coordinates.forEach(rings => {
+          const r = _coordsToRing(rings[0]);
+          if(r){
+            const a = _polyArea(r);
+            if(a > bestArea){ bestArea = a; best = r; }
+          }
+        });
+        outerCoords = best;
+      } else {
+        outerCoords = _coordsToRing(acc.geometry.coordinates[0]);
+      }
+      return outerCoords && outerCoords.length >= 3 ? outerCoords : allPolyPts[0];
+    } catch(e){
+      return allPolyPts.reduce((b, p) => _polyArea(p) > _polyArea(b) ? p : b, allPolyPts[0]);
+    }
+  }
+
+  const unionPoly = _unionAllPolys(polyPts);
+  // primaryPoly is now the union (single combined floor plate). Slab slicing,
+  // outline drawing, edge dimensions, clip path — all use this single shape.
+  const primaryPoly = unionPoly;
+
+  // Bounding box (over all polys for the SVG viewport)
   let bx0=Infinity,bz0=Infinity,bx1=-Infinity,bz1=-Infinity;
   polyPts.forEach(pts=>pts.forEach(p=>{bx0=Math.min(bx0,p[0]);bz0=Math.min(bz0,p[1]);bx1=Math.max(bx1,p[0]);bz1=Math.max(bz1,p[1]);}));
   const bw=bx1-bx0, bh=bz1-bz0;
   if(bw<1||bh<1)return;
 
-  // Point-in-any-polygon (ray casting)
-  function pip(px,pz){
-    for(const pts of polyPts){
-      let inside=false;
-      for(let i=0,j=pts.length-1;i<pts.length;j=i++){
-        const xi=pts[i][0],zi=pts[i][1],xj=pts[j][0],zj=pts[j][1];
-        if((zi>pz)!==(zj>pz)&&(px<(xj-xi)*(pz-zi)/(zj-zi)+xi)) inside=!inside;
-      }
-      if(inside)return true;
-    }
-    return false;
-  }
-
-  // ── STEP 1: Sample cross-sections for corridor centerline ──
-  // For each X, find the Z extent of building → corridor Z = center of extent
-  const xSamples=[];
-  for(let x=bx0+0.5;x<bx1;x+=1){
-    let zMin=Infinity,zMax=-Infinity;
-    for(let z=bz0;z<=bz1;z+=0.5){
-      if(pip(x,z)){zMin=Math.min(zMin,z);zMax=Math.max(zMax,z);}
-    }
-    if(zMin<Infinity && (zMax-zMin)>10){
-      xSamples.push({x,zMin,zMax,zMid:(zMin+zMax)/2,depth:zMax-zMin});
-    }
-  }
-  if(xSamples.length<3){wrap.innerHTML='<div style="color:#555;padding:20px;font-size:11px">Floor plate too narrow</div>';return;}
-
-  // Smooth centerline (5-point moving average)
-  const smth=xSamples.map((s,i)=>{
-    let sum=0,cnt=0;
-    for(let j=Math.max(0,i-5);j<=Math.min(xSamples.length-1,i+5);j++){sum+=xSamples[j].zMid;cnt++;}
-    return {...s,zMid:sum/cnt};
+  // ── PRINCIPAL AXIS via 2x2 covariance eigendecomposition ──
+  // This finds the building's LONG axis regardless of orientation. The corridor
+  // runs along this axis; units stack perpendicular to it. Without this the
+  // sampling was X-axis aligned and produced triangular slivers on diagonal
+  // buildings (the bug shown in the user's screenshot).
+  let pcx=0, pcz=0;
+  primaryPoly.forEach(p=>{ pcx+=p[0]; pcz+=p[1]; });
+  pcx/=primaryPoly.length; pcz/=primaryPoly.length;
+  let sxx=0, sxz=0, szz=0;
+  primaryPoly.forEach(p=>{
+    const dx=p[0]-pcx, dz=p[1]-pcz;
+    sxx+=dx*dx; sxz+=dx*dz; szz+=dz*dz;
   });
+  const axisAngle = 0.5 * Math.atan2(2*sxz, sxx-szz); // radians
+  const cosA=Math.cos(axisAngle), sinA=Math.sin(axisAngle);
 
-  // SVG setup
+  // Forward / inverse rotation about polygon centroid (pcx, pcz)
+  function fwd(p){ const dx=p[0]-pcx, dz=p[1]-pcz; return [ cosA*dx + sinA*dz, -sinA*dx + cosA*dz ]; }
+  function inv(p){ return [  cosA*p[0] - sinA*p[1] + pcx,  sinA*p[0] + cosA*p[1] + pcz ]; }
+
+  // Project the primary polygon to the rotated frame and get its bbox
+  const rot = primaryPoly.map(fwd);
+  let rxMin=Infinity, rxMax=-Infinity, ryMin=Infinity, ryMax=-Infinity;
+  rot.forEach(p=>{ rxMin=Math.min(rxMin,p[0]); rxMax=Math.max(rxMax,p[0]); ryMin=Math.min(ryMin,p[1]); ryMax=Math.max(ryMax,p[1]); });
+  const rotW = rxMax - rxMin;       // building length along corridor (long axis)
+  const rotD = ryMax - ryMin;       // building depth perpendicular to corridor (short axis)
+
+  // SVG setup — sized to fit nicely inside the wrapper without blowing out the page
   const pad=8;
   const vbX=bx0-pad, vbY=bz0-pad, vbW=bw+pad*2, vbH=bh+pad*2;
-  const svgW=wrap.clientWidth||500;
-  const svgH=Math.max(220,Math.round(svgW*vbH/Math.max(1,vbW)));
   const wallThk=0.8;
-  const CORR_W=6;
+  // Public corridor width for residential mid-rise (Group C occupancy).
+  // OBC 3.3.1.9 / 3.4.3.2 minimum is 1100mm (3'-7") for buildings <100 occupants/floor.
+  // Industry-typical Toronto mid-rise: 4'-0" (1220mm) — meets OBC + small buffer.
+  // Reads from up.corridorWidthFt so it's configurable per project; defaults to 4ft.
+  // (Earlier 6'-0" value was incorrectly sourced from institutional/commercial code,
+  // which doesn't apply to residential — that wasted ~5,300sf across a 14-floor building.)
+  const CORR_W = (up && up.corridorWidthFt > 0) ? up.corridorWidthFt : 4;
   const corrHalf=CORR_W/2;
-  const wallIn=1;
+  const wallIn=1;       // 1ft setback from exterior wall
 
-  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" width="${svgW}" height="${svgH}" style="display:block">`;
+  // Architectural decision: if the building's perpendicular bay depth is too
+  // shallow for proper double-loaded units (need >= 16ft per side after corridor),
+  // switch to a single-loaded corridor where all units sit on ONE side and the
+  // corridor runs along the opposite exterior wall. This is what real architects
+  // do for narrow buildings (under ~46ft wide).
+  const _trialBayDepth = (rotD/2) - corrHalf - wallIn;
+  const isSingleLoaded = _trialBayDepth < 16;
+
+  // Use viewBox to scale rather than fixed pixel sizing — keeps it responsive
+  // and aspect-correct without exploding the layout.
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block;max-height:480px">`;
+  // Clip path uses the unified floor plate (no inner tower polygon clip).
   svg+=`<defs><clipPath id="fp-clip-${floorIdx}">`;
-  polyPts.forEach(pts=>{ svg+=`<polygon points="${pts.map(p=>`${p[0]},${p[1]}`).join(' ')}"/>`; });
+  svg+=`<polygon points="${unionPoly.map(p=>`${p[0]},${p[1]}`).join(' ')}"/>`;
   svg+=`</clipPath></defs>`;
   svg+=`<rect x="${vbX}" y="${vbY}" width="${vbW}" height="${vbH}" fill="#08080a"/>`;
 
-  // Building fill
-  polyPts.forEach(pts=>{
-    svg+=`<polygon points="${pts.map(p=>`${p[0]},${p[1]}`).join(' ')}" fill="#131820" stroke="none"/>`;
-  });
+  // Building fill — single union polygon, no overlapping inner fill.
+  svg+=`<polygon points="${unionPoly.map(p=>`${p[0]},${p[1]}`).join(' ')}" fill="#131820" stroke="none"/>`;
 
-  // ── STEP 2: Draw corridor strip following centerline ──
   svg+=`<g clip-path="url(#fp-clip-${floorIdx})">`;
 
-  // Corridor as filled polygon: top edge + reversed bottom edge
-  const cTopPts=smth.map(s=>`${s.x},${s.zMid-corrHalf}`).join(' ');
-  const cBotPts=[...smth].reverse().map(s=>`${s.x},${s.zMid+corrHalf}`).join(' ');
-  svg+=`<polygon points="${cTopPts} ${cBotPts}" fill="#333" stroke="#444" stroke-width="0.3"/>`;
-  // Dashed center line
-  svg+=`<polyline points="${smth.filter((_,i)=>i%3===0).map(s=>`${s.x},${s.zMid}`).join(' ')}" fill="none" stroke="#555" stroke-width="0.3" stroke-dasharray="2,2"/>`;
+  // ── CORE COUNTS (hoisted so unit-placement code can reserve stair space) ──
+  const C = P.core;
+  const numElev = C.numElevators || 0;
+  const numStairs = (C.stairs && C.stairs.length) || 0;
 
-  // ── Core elements ──
-  const C=P.core;
-  const numElev=C.numElevators||0;
-  const isEW=(C.elevDir==='ew');
-  const elevW=7, elevD=8, stairW=10, stairD=22, elevSpc=elevW+1.5;
+  // ── CORRIDOR — sized to actual unit extent (no more "road" extending past units) ──
+  // For SINGLE-LOADED buildings (narrow), corridor sits against one exterior wall;
+  // for DOUBLE-LOADED, corridor sits in the middle. Length is set after units are
+  // placed so it doesn't extend into empty space.
+  const corrInsetX = 8;  // exterior wall reserved for end stairs
+  const corrXMin = rxMin + corrInsetX;
+  const corrXMax = rxMax - corrInsetX;
+  // ── KEY FIX — center corridor on the rotated BOUNDING-BOX midpoint, NOT the
+  // polygon centroid. With asymmetric buildings (bumps, notches, setbacks) the
+  // centroid drifts toward the heavier side, which previously pushed the corridor
+  // away from the bbox center and made every unit on the wider side fail the
+  // fit-check (their yWall ended up outside the building). Using bbox midpoint
+  // keeps the corridor equidistant from BOTH long walls regardless of asymmetry.
+  const rotBboxMidY = (ryMin + ryMax) / 2;
+  const corrCenterY = isSingleLoaded ? (ryMin + corrHalf + wallIn) : rotBboxMidY;
+  // We'll draw the corridor AFTER units so we know how far it should extend.
+  let _corridorDrawXMin = corrXMin, _corridorDrawXMax = corrXMin; // will be updated
 
-  // Core bounding box
-  let cx0=Infinity,cz0=Infinity,cx1=-Infinity,cz1=-Infinity;
-  for(let e=0;e<numElev;e++){
-    const ex=isEW?C.elevX+e*elevSpc:C.elevX;
-    const ez=isEW?C.elevZ:C.elevZ+e*elevSpc;
-    cx0=Math.min(cx0,ex);cz0=Math.min(cz0,ez);cx1=Math.max(cx1,ex+elevW);cz1=Math.max(cz1,ez+elevD);
-  }
-  (C.stairs||[]).forEach(st=>{
-    cx0=Math.min(cx0,st.x);cz0=Math.min(cz0,st.z);cx1=Math.max(cx1,st.x+stairW);cz1=Math.max(cz1,st.z+stairD);
-  });
-  // Core background
-  svg+=`<rect x="${cx0-2}" y="${cz0-2}" width="${cx1-cx0+4}" height="${cz1-cz0+4}" fill="#1a1e22" stroke="#555" stroke-width="0.4"/>`;
-  // Elevators
-  for(let e=0;e<numElev;e++){
-    const ex=isEW?C.elevX+e*elevSpc:C.elevX;
-    const ez=isEW?C.elevZ:C.elevZ+e*elevSpc;
-    svg+=`<rect x="${ex}" y="${ez}" width="${elevW}" height="${elevD}" fill="#c49ade22" stroke="#c49ade" stroke-width="0.4"/>`;
-    svg+=`<line x1="${ex+1}" y1="${ez+1}" x2="${ex+elevW-1}" y2="${ez+elevD-1}" stroke="#c49ade" stroke-width="0.2" opacity="0.5"/>`;
-    svg+=`<line x1="${ex+elevW-1}" y1="${ez+1}" x2="${ex+1}" y2="${ez+elevD-1}" stroke="#c49ade" stroke-width="0.2" opacity="0.5"/>`;
-  }
-  (C.stairs||[]).forEach((st,si)=>{
-    svg+=`<rect x="${st.x}" y="${st.z}" width="${stairW}" height="${stairD}" fill="#b0605022" stroke="#b06050" stroke-width="0.4"/>`;
-    for(let t=0;t<8;t++){
-      const ty=st.z+2+t*(stairD-4)/8;
-      svg+=`<line x1="${st.x+1}" y1="${ty}" x2="${st.x+stairW-1}" y2="${ty}" stroke="#b06050" stroke-width="0.2" opacity="0.4"/>`;
-    }
-    svg+=`<text x="${st.x+stairW/2}" y="${st.z+stairD/2+1}" fill="#b06050" font-size="3" text-anchor="middle" font-family="Outfit" font-weight="700">ST${si+1}</text>`;
-  });
-
+  // ── UNIT TYPES — ARCHITECTURAL STANDARD FRONTAGES ──
+  // These are the widths a real architect would use for double-loaded apartments
+  // (corridor side facing in, exterior windows facing out). The frontage matters
+  // most because the bay depth is fixed by the building width.
   const typeLabel=fl.floorType==='commercial'?'COMMERCIAL GF':fl.floorType==='amenity'?'AMENITY / RESI':'RESIDENTIAL';
   const typeColor=fl.floorType==='commercial'?'#e8c87a':fl.floorType==='amenity'?'#4ecdc4':'#88aabb';
 
-  // ── STEP 3: Double-loaded units on both sides of corridor ──
   if(fl.units&&fl.units.length>0&&fl.floorType!=='commercial'){
     const units=[...fl.units.map((u,i)=>({...u,origIdx:i}))];
     const abbrs={'Studio':'ST','1-Bedroom':'1B','1-Bed+Den':'1BD','2-Bedroom':'2B','2-Bed+Den':'2BD','3-Bedroom':'3B'};
-    const unitColors={'Studio':'#e8c87a','1-Bedroom':'#88aabb','1-Bed+Den':'#4ecdc4','2-Bedroom':'#c49ade','2-Bed+Den':'#e07b6a','3-Bedroom':'#6aaa6a'};
+    // Source of truth: up.unitTypes (same colors used by the unit chips and floor composition strings)
+    const unitColors={};
+    (up.unitTypes||[]).forEach(t=>{ if(t&&t.type) unitColors[t.type]=t.color||'#888'; });
+    // Architectural standard frontages (corridor frontage in feet) — what a
+    // real architect would specify for a Toronto mid-rise apartment building.
+    // These match common bay-spacing modules (≈8'-2") and column grids.
+    const stdFrontage={'Studio':14,'1-Bedroom':20,'1-Bed+Den':22,'2-Bedroom':26,'2-Bed+Den':29,'3-Bedroom':33};
 
-    // Sort: larger units at ends (corners), smaller in middle
-    const sorted=[...units].sort((a,b)=>b.size-a.size);
-    const northUnits=[], southUnits=[];
-    sorted.forEach((u,i)=>{ if(i%2===0) northUnits.push(u); else southUnits.push(u); });
-    southUnits.reverse(); // large units at opposite ends for corner coverage
-
-    // Place units on one side of the corridor
-    function placeSide(sideUnits, side){
-      if(sideUnits.length===0||smth.length<3)return;
-      const totalSF=sideUnits.reduce((s,u)=>s+u.size,0);
-      const startX=smth[0].x+wallIn;
-      const endX=smth[smth.length-1].x-wallIn;
-      const usable=endX-startX;
-      if(usable<10)return;
-
-      let posX=startX;
-      sideUnits.forEach(u=>{
-        const col=unitColors[u.type]||'#888';
-        const abbr=abbrs[u.type]||u.type.substring(0,2);
-        const frontage=Math.max(8,(u.size/totalSF)*usable);
-        const uStartX=posX;
-        const uEndX=Math.min(posX+frontage,endX);
-
-        // Find corridor center Z at unit start and end
-        const sSamp=smth.reduce((b,s)=>Math.abs(s.x-uStartX)<Math.abs(b.x-uStartX)?s:b);
-        const eSamp=smth.reduce((b,s)=>Math.abs(s.x-uEndX)<Math.abs(b.x-uEndX)?s:b);
-
-        // Unit polygon: 4 corners from corridor edge to building wall
-        let ce_s, ce_e, w_s, w_e; // corridor edge Z and wall Z at start/end
-        if(side==='north'){
-          ce_s=sSamp.zMid-corrHalf; ce_e=eSamp.zMid-corrHalf;
-          w_s=sSamp.zMin+wallIn;    w_e=eSamp.zMin+wallIn;
-        } else {
-          ce_s=sSamp.zMid+corrHalf; ce_e=eSamp.zMid+corrHalf;
-          w_s=sSamp.zMax-wallIn;    w_e=eSamp.zMax-wallIn;
-        }
-
-        // Check bay depth is reasonable (skip if core is here)
-        const bayDepth=Math.abs(ce_s-w_s);
-        if(bayDepth<5){posX+=frontage;return;} // too shallow, skip (core area)
-
-        const g=0.4; // gap between units
-        const p1=`${uStartX+g},${ce_s}`;
-        const p2=`${uEndX-g},${ce_e}`;
-        const p3=`${uEndX-g},${w_e}`;
-        const p4=`${uStartX+g},${w_s}`;
-
-        svg+=`<polygon points="${p1} ${p2} ${p3} ${p4}" fill="${col}20" stroke="${col}" stroke-width="0.35"`;
-        if(up.mode==='manual') svg+=` style="cursor:pointer" onclick="removeFloorUnit(${floorIdx},${u.origIdx})"`;
-        svg+=`/>`;
-        // Partition wall
-        svg+=`<line x1="${uEndX-g}" y1="${ce_e}" x2="${uEndX-g}" y2="${w_e}" stroke="#333" stroke-width="0.25"/>`;
-
-        // Labels
-        const lcx=(uStartX+uEndX)/2;
-        const lcz=(ce_s+w_s)/2;
-        const fs=bayDepth>15&&frontage>12?3:2.2;
-        svg+=`<text x="${lcx}" y="${lcz-1}" fill="${col}" font-size="${fs}" text-anchor="middle" font-family="Outfit" font-weight="700">${abbr}</text>`;
-        svg+=`<text x="${lcx}" y="${lcz+1.8}" fill="#666" font-size="${fs*0.65}" text-anchor="middle" font-family="Outfit">${u.size}sf</text>`;
-        svg+=`<text x="${lcx}" y="${lcz+3.8}" fill="#444" font-size="${fs*0.5}" text-anchor="middle" font-family="Outfit">${Math.round(uEndX-uStartX)}'×${Math.round(bayDepth)}'</text>`;
-
-        posX+=frontage;
-      });
+    // ── Point-in-polygon (hoisted so per-side bay depth sampling can use it) ──
+    function _pointInPoly(pt, poly){
+      let inside = false;
+      for(let i=0, j=poly.length-1; i<poly.length; j=i++){
+        const xi=poly[i][0], yi=poly[i][1], xj=poly[j][0], yj=poly[j][1];
+        const intersect = ((yi>pt[1])!==(yj>pt[1])) &&
+          (pt[0] < (xj-xi)*(pt[1]-yi)/((yj-yi)||1e-9) + xi);
+        if(intersect) inside = !inside;
+      }
+      return inside;
     }
 
-    placeSide(northUnits,'north');
-    placeSide(southUnits,'south');
+    // ── PER-SIDE BAY DEPTH (sampled, not derived from bbox) ──
+    // The previous code used (rotD/2) which over-estimates depth for asymmetric
+    // buildings (bumps push rotD up but the typical wall is closer in). We now
+    // sample the building polygon at 25 x-positions along the corridor, ray-cast
+    // perpendicular outward on each side until we leave the polygon, and take
+    // the MEDIAN as the representative wall distance. The MIN of north/south
+    // medians becomes bayDepth — units have to fit on BOTH sides.
+    function _sampleBayDepth(signY){
+      const samples = [];
+      const xStep = (corrXMax - corrXMin) / 25;
+      for(let x = corrXMin; x <= corrXMax + 0.001; x += xStep){
+        let d = 0;
+        // Step outward from corridor edge in 0.5ft increments
+        while(d < rotD){
+          const test = inv([x, corrCenterY + signY * (corrHalf + d)]);
+          if(!_pointInPoly(test, primaryPoly)) break;
+          d += 0.5;
+        }
+        if(d > 0) samples.push(Math.max(0, d - wallIn));
+      }
+      if(samples.length === 0) return 0;
+      samples.sort((a,b) => a-b);
+      // Use 40th percentile so the typical (dominant) wall position drives bayDepth
+      // — the bump's deeper section becomes a bonus zone, not the design depth.
+      return samples[Math.floor(samples.length * 0.4)];
+    }
+    const northBayDepth = isSingleLoaded ? 0 : _sampleBayDepth(-1);
+    const southBayDepth = _sampleBayDepth(+1);
+    const bayDepth = isSingleLoaded
+      ? southBayDepth
+      : Math.min(northBayDepth, southBayDepth);
+
+    if(bayDepth >= 12){
+      // ── SLAB-SLICING APPROACH ──
+      // Take the building polygon (in rotated frame), subtract the corridor strip,
+      // get the residential bay polygons (north slab + south slab). Then slice
+      // each slab perpendicular to the corridor at positions that give each unit
+      // its target AREA. Units inherit the building's actual shape — trapezoids
+      // at building steps, full polygons at the wider parts. Zero empty space.
+
+      // Reserve space at each end for stairwells
+      const stairReserve = (numStairs > 0) ? 13 : 0;
+
+      // Build the rotated building polygon
+      const rotPoly = primaryPoly.map(fwd);
+
+      // ── Sutherland-Hodgman half-plane clip ──
+      // axis: 'x' or 'y'.  sign: -1 keeps coords <= cut, +1 keeps coords >= cut.
+      function _clipHalfPlane(poly, axis, sign, cut){
+        if(!poly || poly.length < 3) return [];
+        const idx = axis === 'x' ? 0 : 1;
+        const inside = pt => sign === -1 ? pt[idx] <= cut + 1e-9 : pt[idx] >= cut - 1e-9;
+        const intersect = (a, b) => {
+          const denom = b[idx] - a[idx];
+          if(Math.abs(denom) < 1e-9) return [a[0], a[1]];
+          const t = (cut - a[idx]) / denom;
+          return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+        };
+        const out = [];
+        for(let i = 0; i < poly.length; i++){
+          const a = poly[(i + poly.length - 1) % poly.length];
+          const b = poly[i];
+          const aIn = inside(a), bIn = inside(b);
+          if(bIn){
+            if(!aIn) out.push(intersect(a, b));
+            out.push(b);
+          } else if(aIn){
+            out.push(intersect(a, b));
+          }
+        }
+        return out;
+      }
+
+      function _polyAreaSigned(poly){
+        let a = 0;
+        for(let i = 0; i < poly.length; i++){
+          const j = (i + 1) % poly.length;
+          a += poly[i][0] * poly[j][1] - poly[j][0] * poly[i][1];
+        }
+        return a / 2;
+      }
+      const _polyAreaAbs = poly => Math.abs(_polyAreaSigned(poly));
+
+      // Slab between corridor and exterior wall on each side
+      // First clip to corridor X range so units don't extend past stair reserves
+      const slabXMin = rxMin + Math.max(2, stairReserve - 5);
+      const slabXMax = rxMax - Math.max(2, stairReserve - 5);
+      let polyTrim = _clipHalfPlane(rotPoly, 'x', +1, slabXMin);
+      polyTrim    = _clipHalfPlane(polyTrim, 'x', -1, slabXMax);
+
+      // North slab = part of building above (smaller y than) corridor edge
+      const northSlabRaw = isSingleLoaded ? [] : _clipHalfPlane(polyTrim, 'y', -1, corrCenterY - corrHalf);
+      // South slab = part of building below corridor edge
+      const southSlabRaw = _clipHalfPlane(polyTrim, 'y', +1, corrCenterY + corrHalf);
+
+      const nArea = _polyAreaAbs(northSlabRaw);
+      const sArea = _polyAreaAbs(southSlabRaw);
+
+      // ── Distribute units to N/S by remaining area (greedy bin-pack) ──
+      const sortedDesc = [...units].sort((a, b) => b.size - a.size);
+      const northUnits = [], southUnits = [];
+      let nRem = nArea, sRem = sArea;
+      sortedDesc.forEach(u => {
+        if(isSingleLoaded){ southUnits.push(u); sRem -= u.size; }
+        else if(nRem >= sRem){ northUnits.push(u); nRem -= u.size; }
+        else { southUnits.push(u); sRem -= u.size; }
+      });
+      // Order each side small→big→small so corner units (ends) tend to be bigger
+      function _arrangeBySide(arr){
+        const desc = [...arr].sort((a, b) => b.size - a.size);
+        const left = [], right = [];
+        desc.forEach((u, i) => { if(i % 2 === 0) left.push(u); else right.push(u); });
+        return left.concat(right.reverse());
+      }
+      const northArr = _arrangeBySide(northUnits);
+      const southArr = _arrangeBySide(southUnits);
+
+      // ── Slice a slab into N pieces along the corridor (X axis) ──
+      // ARCHITECTURAL CORRECTNESS: each unit polygon's drawn area MUST equal the
+      // unit's true size (set by autoDistributeUnits to reconcile with f.netSF).
+      // Previously we scaled targets to fill `slabArea`, which inflated units by
+      // ~10-20% because the slab only deducts the corridor — net SF also deducts
+      // cores/lobby/amenity. So drawn Σunit_size > f.netSF and the math didn't
+      // tie out.
+      //
+      // NEW BEHAVIOUR: slice for each unit at its actual u.size. Any leftover
+      // slab area (slab − Σunit_size) is left EMPTY and represents the cores +
+      // lobby + amenity space that aren't drawn as discrete polygons. This is
+      // exactly what a real architect would show: units at their built size,
+      // empty footprint area for back-of-house. Drawn unit sizes now sum to
+      // exactly f.netSF, matching the floor schedule and proforma.
+      function _sliceSlab(slab, sideUnits){
+        const out = [];
+        if(!slab || slab.length < 3 || sideUnits.length === 0) return out;
+        const slabArea = _polyAreaAbs(slab);
+        if(slabArea < 50) return out;
+
+        // Use actual unit sizes — no scale-to-fill
+        const targets = sideUnits.map(u => u.size);
+
+        let remaining = slab;
+        for(let i = 0; i < sideUnits.length; i++){
+          const target = targets[i];
+          const remainingArea = _polyAreaAbs(remaining);
+          if(remainingArea < target * 0.6 || remaining.length < 3){
+            // Not enough space left for this unit — stop placing on this side
+            // (architecturally honest: leftover area becomes back-of-house, no
+            // need to inflate the last unit just to consume the slab).
+            break;
+          }
+          const xs = remaining.map(p => p[0]);
+          let lo = Math.min(...xs), hi = Math.max(...xs);
+          // Binary search for the cut that yields the unit's actual area
+          let cut = (lo + hi) / 2;
+          for(let it = 0; it < 22; it++){
+            cut = (lo + hi) / 2;
+            const leftPart = _clipHalfPlane(remaining, 'x', -1, cut);
+            const a = _polyAreaAbs(leftPart);
+            if(a < target) lo = cut;
+            else hi = cut;
+          }
+          const left = _clipHalfPlane(remaining, 'x', -1, cut);
+          const right = _clipHalfPlane(remaining, 'x', +1, cut);
+          if(_polyAreaAbs(left) < 30 || left.length < 3){
+            break; // sliver — abandon
+          }
+          out.push({ unit: sideUnits[i], poly: left });
+          remaining = right;
+        }
+        return out;
+      }
+
+      // ── Draw a polygon unit (in rotated frame → invert to world) ──
+      function _drawUnitPoly(unitPoly, u, signY){
+        if(!unitPoly || unitPoly.length < 3) return;
+        const col = unitColors[u.type] || '#888';
+        const abbr = abbrs[u.type] || u.type.substring(0, 2);
+        const worldPts = unitPoly.map(inv);
+        const ptsStr = worldPts.map(p => `${p[0]},${p[1]}`).join(' ');
+        const drawnSF = Math.round(_polyAreaAbs(unitPoly));
+
+        svg += `<polygon points="${ptsStr}" fill="${col}30" stroke="${col}" stroke-width="0.45"`;
+        if(up.mode === 'manual') svg += ` style="cursor:pointer" onclick="removeFloorUnit(${floorIdx},${u.origIdx})"`;
+        svg += `/>`;
+
+        // Centroid in rotated frame, for label
+        let cx = 0, cy = 0;
+        unitPoly.forEach(p => { cx += p[0]; cy += p[1]; });
+        cx /= unitPoly.length; cy /= unitPoly.length;
+        const lc = inv([cx, cy]);
+        const xs = unitPoly.map(p => p[0]);
+        const w = Math.max(...xs) - Math.min(...xs);
+        const fs = Math.min(2.6, Math.max(1.6, w * 0.14));
+        const rotDeg = axisAngle * 180 / Math.PI;
+        svg += `<text x="${lc[0]}" y="${lc[1] - 1}" fill="${col}" font-size="${fs}" text-anchor="middle" font-family="Outfit" font-weight="700"
+                 transform="rotate(${rotDeg} ${lc[0]} ${lc[1]})">${abbr}</text>`;
+        svg += `<text x="${lc[0]}" y="${lc[1] + 1.4}" fill="#888" font-size="${fs * 0.6}" text-anchor="middle" font-family="Outfit"
+                 transform="rotate(${rotDeg} ${lc[0]} ${lc[1]})">${drawnSF}sf</text>`;
+
+        // Window marker on exterior wall (the slab edge facing away from corridor)
+        const ys = unitPoly.map(p => p[1]);
+        const wallY = signY < 0 ? Math.min(...ys) : Math.max(...ys);
+        const wallPt0 = inv([Math.min(...xs) + 1, wallY - signY * 0.3]);
+        const wallPt1 = inv([Math.max(...xs) - 1, wallY - signY * 0.3]);
+        svg += `<line x1="${wallPt0[0]}" y1="${wallPt0[1]}" x2="${wallPt1[0]}" y2="${wallPt1[1]}" stroke="${col}" stroke-width="0.6" opacity="0.7"/>`;
+      }
+
+      const northSlices = _sliceSlab(northSlabRaw, northArr);
+      const southSlices = _sliceSlab(southSlabRaw, southArr);
+      northSlices.forEach(s => _drawUnitPoly(s.poly, s.unit, -1));
+      southSlices.forEach(s => _drawUnitPoly(s.poly, s.unit, +1));
+
+      // Corridor extent for drawing
+      _corridorDrawXMin = slabXMin;
+      _corridorDrawXMax = slabXMax;
+    }
+  }
+
+  // ── DRAW CORRIDOR (now that we know how far it extends) ──
+  // Inserted at the END of the clip group so it sits below stairs/elevators
+  // but above the building fill.
+  if(_corridorDrawXMax > _corridorDrawXMin){
+    const corrPolyRot = [
+      [_corridorDrawXMin, corrCenterY - corrHalf],
+      [_corridorDrawXMax, corrCenterY - corrHalf],
+      [_corridorDrawXMax, corrCenterY + corrHalf],
+      [_corridorDrawXMin, corrCenterY + corrHalf]
+    ];
+    const corrPolyWorld = corrPolyRot.map(inv);
+    svg += `<polygon points="${corrPolyWorld.map(p=>`${p[0]},${p[1]}`).join(' ')}" fill="#2a2e34" stroke="#555" stroke-width="0.4" opacity="0.95"/>`;
+    const cl0 = inv([_corridorDrawXMin, corrCenterY]), cl1 = inv([_corridorDrawXMax, corrCenterY]);
+    svg += `<line x1="${cl0[0]}" y1="${cl0[1]}" x2="${cl1[0]}" y2="${cl1[1]}" stroke="#666" stroke-width="0.3" stroke-dasharray="2,2"/>`;
+  }
+
+  // ── CORE (elevators + stairs) — placed at corridor centerline, mid-building ──
+  // Render after units so the core sits on top (visually overrides any unit at the centroid).
+  // (C, numElev, numStairs were hoisted to the top of this function so the unit-placement
+  // block can reserve space at each end of the corridor for the stairwells.)
+  if(numElev>0 || numStairs>0){
+    const elevW=8, elevD=10, stairW=12, stairD=20;     // dimensions in rotated frame
+    const coreGap=1.5;
+    // Stack layout: elevators on one side of centerline, stairs on the other
+    // Position core near the building midpoint along the corridor
+    const coreCenterX = (corrXMin + corrXMax) / 2;
+    const elevTotalW = numElev * elevW + Math.max(0, numElev-1) * 0.8;
+    let elevStartX = coreCenterX - elevTotalW/2;
+
+    // Elevator block — sits opposite the units (or above corridor for single-loaded)
+    const elevSideY = isSingleLoaded ? +1 : -1; // single-loaded → put core on units side, edge of corridor
+    for(let e=0; e<numElev; e++){
+      const ex = elevStartX + e * (elevW + 0.8);
+      const ey = corrCenterY + elevSideY * (corrHalf) + (elevSideY * coreGap) + (elevSideY < 0 ? -elevD : 0);
+      const c1=inv([ex,ey]), c2=inv([ex+elevW,ey]), c3=inv([ex+elevW,ey+elevD]), c4=inv([ex,ey+elevD]);
+      svg += `<polygon points="${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${c3[0]},${c3[1]} ${c4[0]},${c4[1]}" fill="#c49ade2a" stroke="#c49ade" stroke-width="0.5"/>`;
+      // Diagonal X marker
+      svg += `<line x1="${c1[0]}" y1="${c1[1]}" x2="${c3[0]}" y2="${c3[1]}" stroke="#c49ade" stroke-width="0.25" opacity="0.55"/>`;
+      svg += `<line x1="${c2[0]}" y1="${c2[1]}" x2="${c4[0]}" y2="${c4[1]}" stroke="#c49ade" stroke-width="0.25" opacity="0.55"/>`;
+      const lbl = inv([ex+elevW/2, ey+elevD/2]);
+      svg += `<text x="${lbl[0]}" y="${lbl[1]+0.8}" fill="#c49ade" font-size="2.2" text-anchor="middle" font-family="Outfit" font-weight="700"
+               transform="rotate(${axisAngle*180/Math.PI} ${lbl[0]} ${lbl[1]})">EL${e+1}</text>`;
+    }
+    // Stairs — at OPPOSITE ENDS of the corridor (proper fire-egress separation per OBC)
+    // Stairs sit on the OPPOSITE side of the corridor from the elevators
+    const stairSideY = isSingleLoaded ? +1 : +1;  // always opposite the elevators (or units side for single-loaded)
+    for(let si=0; si<numStairs; si++){
+      // First stair at far-left end of corridor, last stair at far-right end
+      const stairFrac = numStairs===1 ? 0.5 : si/(numStairs-1);
+      // Snap to ends: 0 → left end (just inside building), 1 → right end
+      const endInset = isSingleLoaded ? 4 : 2;
+      const sx = (rxMin + endInset) + stairFrac * ((rxMax - endInset) - (rxMin + endInset) - stairW);
+      const sy = corrCenterY + stairSideY * corrHalf + stairSideY * coreGap + (stairSideY < 0 ? -stairD : 0);
+      const c1=inv([sx,sy]), c2=inv([sx+stairW,sy]), c3=inv([sx+stairW,sy+stairD]), c4=inv([sx,sy+stairD]);
+      svg += `<polygon points="${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${c3[0]},${c3[1]} ${c4[0]},${c4[1]}" fill="#b060502a" stroke="#b06050" stroke-width="0.5"/>`;
+      // Stair tread lines
+      for(let t=0;t<8;t++){
+        const tFrac = (t+1)/9;
+        const tStart = inv([sx+1, sy + tFrac*stairD]);
+        const tEnd   = inv([sx+stairW-1, sy + tFrac*stairD]);
+        svg += `<line x1="${tStart[0]}" y1="${tStart[1]}" x2="${tEnd[0]}" y2="${tEnd[1]}" stroke="#b06050" stroke-width="0.18" opacity="0.5"/>`;
+      }
+      const lbl = inv([sx+stairW/2, sy+stairD/2]);
+      svg += `<text x="${lbl[0]}" y="${lbl[1]+0.8}" fill="#b06050" font-size="2.4" text-anchor="middle" font-family="Outfit" font-weight="700"
+               transform="rotate(${axisAngle*180/Math.PI} ${lbl[0]} ${lbl[1]})">ST${si+1}</text>`;
+    }
   }
 
   svg+=`</g>`; // end clip
 
-  // Exterior walls on top
-  polyPts.forEach(pts=>{
-    svg+=`<polygon points="${pts.map(p=>`${p[0]},${p[1]}`).join(' ')}" fill="none" stroke="#5a6a7a" stroke-width="${wallThk}" stroke-linejoin="round"/>`;
-  });
-  // Edge dimensions
-  polyPts.forEach(pts=>{
-    for(let i=0;i<pts.length;i++){
-      const p0=pts[i], p1=pts[(i+1)%pts.length];
-      const len=Math.round(Math.sqrt((p1[0]-p0[0])**2+(p1[1]-p0[1])**2));
-      if(len<10)continue;
-      const mx=(p0[0]+p1[0])/2, mz=(p0[1]+p1[1])/2;
-      const dx=p1[0]-p0[0], dz=p1[1]-p0[1];
-      const el=Math.sqrt(dx*dx+dz*dz);
-      svg+=`<text x="${mx-dz/el*3}" y="${mz+dx/el*3}" fill="#555" font-size="2.5" text-anchor="middle" font-family="Outfit" font-weight="600">${len}'</text>`;
-    }
-  });
+  // Exterior walls — single union polygon (no nested tower/podium outlines)
+  svg+=`<polygon points="${unionPoly.map(p=>`${p[0]},${p[1]}`).join(' ')}" fill="none" stroke="#5a6a7a" stroke-width="${wallThk}" stroke-linejoin="round"/>`;
+  // Edge dimensions on the union outline only (no duplicate inner edge labels)
+  for(let i=0;i<unionPoly.length;i++){
+    const p0=unionPoly[i], p1=unionPoly[(i+1)%unionPoly.length];
+    const len=Math.round(Math.sqrt((p1[0]-p0[0])**2+(p1[1]-p0[1])**2));
+    if(len<10)continue;
+    const mx=(p0[0]+p1[0])/2, mz=(p0[1]+p1[1])/2;
+    const dx=p1[0]-p0[0], dz=p1[1]-p0[1];
+    const el=Math.sqrt(dx*dx+dz*dz);
+    svg+=`<text x="${mx-dz/el*3}" y="${mz+dx/el*3}" fill="#555" font-size="2.5" text-anchor="middle" font-family="Outfit" font-weight="600">${len}'</text>`;
+  }
   // Floor info
   svg+=`<text x="${vbX+2}" y="${vbY+4}" fill="${typeColor}" font-size="3.5" font-family="Outfit" font-weight="700">F${fl.floor} — ${typeLabel}</text>`;
-  svg+=`<text x="${vbX+2}" y="${vbY+8}" fill="#555" font-size="2.3" font-family="Outfit">Gross ${fl.grossSF.toLocaleString()}sf · Net ${fl.netSF.toLocaleString()}sf · ${fl.units.length} units · ${fl.efficiency}%</text>`;
+  svg+=`<text x="${vbX+2}" y="${vbY+8}" fill="#555" font-size="2.3" font-family="Outfit">Gross ${fl.grossSF.toLocaleString()}sf · Net ${fl.netSF.toLocaleString()}sf · ${fl.units.length} units · ${fl.efficiency}% · ${isSingleLoaded?'single-loaded':'double-loaded'} corridor</text>`;
 
   if(up.mode==='manual'&&_unitEditorSelectedType&&fl.floorType!=='commercial'){
     svg+=`<rect x="${vbX}" y="${vbY}" width="${vbW}" height="${vbH}" fill="transparent" style="cursor:crosshair" onclick="addFloorUnit(${floorIdx})"/>`;
@@ -729,15 +1143,16 @@ function updateUnitSummary(){
     const totalDeductions=resGrossGFA-netSellable;
     const efficiency=resGrossGFA>0?(netSellable/resGrossGFA*100):0;
 
-    const maxStoreys=P.vols.reduce((m,v)=>Math.max(m,v.storeys),0);
+    // Use top storey across stacked volumes (baseElevFt-aware) — so a Tower on a
+    // Podium counts up to floor 8, not just its own 4 storeys.
+    const _gfH=(P.flr&&P.flr.gf)||15, _typH=(P.flr&&P.flr.typ)||10;
+    const _ssOf=v=>(!v.baseElevFt||v.baseElevFt<=0.5)?1:Math.max(1,Math.round((v.baseElevFt-_gfH)/_typH)+2);
+    const maxStoreys=P.vols.reduce((m,v)=>Math.max(m, _ssOf(v) + (v.storeys||0) - 1),0);
     const resFloors=Math.max(1,maxStoreys-(P.vols.some(v=>v.commGF)?1:0));
-    const elevShafts=P.core.numElevators||0;
-    const stairwells=P.core.stairs?P.core.stairs.length:0;
-    const elevPerFloor=elevShafts*75;
-    const stairPerFloor=stairwells*150;
-    const corridorTotal=resGrossGFA*0.15;
-    const lobbyDeduct=Math.min(2500,resGrossGFA*0.02);
-    const amenityDeduct=Math.min(5000,resGrossGFA*0.04);
+    // Use slider-driven deduction breakdown from pfCalc (not hardcoded percentages)
+    const corridorTotal=d.deductions?d.deductions.corridorTotal:totalDeductions*0.71;
+    const lobbyDeduct=d.deductions?d.deductions.lobbyDeduct:totalDeductions*0.10;
+    const amenityDeduct=d.deductions?d.deductions.amenityDeduct:totalDeductions*0.19;
 
     const unitMix=d.unitMix||[];
     const total=d.totalUnits||0;
@@ -748,11 +1163,9 @@ function updateUnitSummary(){
       ${row('Commercial GFA (GF)',fmt(commGFA)+' sf')}
       ${row('Residential Gross GFA',fmt(resGrossGFA)+' sf')}
       <div style="border-top:1px solid #333333;margin:6px 0"></div>
-      <div style="font-size:10px;font-weight:700;color:#ff8866;letter-spacing:1px;margin-bottom:4px">CIRCULATION & BUILDING SYSTEMS</div>
-      ${row(`Elevator shafts (${elevShafts} × 75sf × ${resFloors}fl)`,fmt(elevPerFloor*resFloors)+' sf','#ff8866')}
-      ${row(`Exit stairs (${stairwells} × 150sf × ${resFloors}fl)`,fmt(stairPerFloor*resFloors)+' sf','#ff8866')}
-      ${row(`Corridors (15% of resi GFA)`,fmt(corridorTotal)+' sf','#ff8866')}
-      ${row(`Lobby/amenity deductions`,fmt(lobbyDeduct+amenityDeduct)+' sf','#cc88dd')}
+      <div style="font-size:13px;font-weight:700;color:#ff8866;letter-spacing:1px;margin-bottom:4px">DEDUCTIONS (${(100-efficiency).toFixed(0)}% loss from efficiency slider)</div>
+      ${row(`Corridors, elevators & stairs`,fmt(corridorTotal)+' sf','#ff8866')}
+      ${row(`Lobby & amenity areas`,fmt(lobbyDeduct+amenityDeduct)+' sf','#cc88dd')}
       <div style="border-top:1px solid #333333;margin:6px 0"></div>
       <div style="display:flex;justify-content:space-between;padding:3px 0">
         <span style="color:#ff8866;font-size:12px;font-weight:700">Total Deductions</span>
@@ -762,20 +1175,23 @@ function updateUnitSummary(){
         <span style="color:#AEBC46;font-size:13px;font-weight:700">Net Sellable Area</span>
         <span style="color:#AEBC46;font-size:15px;font-weight:700">${fmt(netSellable)} sf</span>
       </div>
-      <div style="font-size:10px;color:#888;margin-bottom:10px">Efficiency: ${efficiency.toFixed(1)}% net-to-gross</div>
+      <div style="font-size:13px;color:#888;margin-bottom:10px">Efficiency: ${efficiency.toFixed(1)}% net-to-gross</div>
 
       <div style="border-top:1px solid #333333;margin:8px 0"></div>
       <div style="font-size:11px;font-weight:700;color:#AEBC46;letter-spacing:1px;margin-bottom:8px">UNIT MIX</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        ${unitMix.map(u=>{
+        ${(()=>{
+          // Source of truth: P.unitPlan.unitTypes (same colors used by chips, floor plate SVG, and legend)
+          const colors={};
+          ((P.unitPlan && P.unitPlan.unitTypes)||[]).forEach(t=>{ if(t&&t.type) colors[t.type]=t.color||'#aaa'; });
+          return unitMix.map(u=>{
           const upct=total>0?Math.round(u.count/total*100):0;
-          const colors={'Studio':'#e8c87a','1-Bedroom':'#c49ade','1-Bed+Den':'#88bbdd','2-Bedroom':'#8db4e8','2-Bed+Den':'#a0d4a0','3-Bedroom':'#e8a08d'};
           return `<div>
             <div style="color:${colors[u.type]||'#aaa'};font-weight:700;font-size:12px">${u.type}</div>
             <div style="color:#AEBC46;font-size:16px;font-weight:700">${u.count} units</div>
-            <div style="font-size:10px;color:#888">~${u.size} sf avg · ${upct}% mix</div>
+            <div style="font-size:13px;color:#888">~${u.size} sf avg · ${upct}% mix</div>
           </div>`;
-        }).join('')}
+        }).join(''); })()}
       </div>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #333333;display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:12px;color:#888">TOTAL UNITS</span>

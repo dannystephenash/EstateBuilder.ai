@@ -1,3 +1,4 @@
+// cache-buster: 20260504l
 // optimal-massing.js — AI-driven massing generator, midrise/highrise builders
 // ═══════════════════════════════════════════════════════════
 //  OPTIMAL MASSING GENERATOR
@@ -27,6 +28,19 @@ function generateOptimalMassing(){
   var vts=lotVerts();
   if(!vts||vts.length<3) return;
 
+  // ── INDUSTRIAL: bypass the zoning check entirely. Industrial generator uses
+  //    industry-standard defaults (40% coverage, 25/15/20 ft setbacks, 40 ft
+  //    clear). Some Toronto/Mississauga lots have no published zoning data and
+  //    we don't want to block industrial development feasibility on that.
+  if(assetClass === 'industrial'){
+    if(typeof window._omGenerateIndustrial === 'function'){
+      window._omGenerateIndustrial(P.zoning || null, vts);
+    } else {
+      console.error('[OM] industrial generator not loaded — check optimal-massing-industrial.js');
+    }
+    return;
+  }
+
   // ── REQUIRE ZONING DATA — probe lot polygon if not already set ──
   var zoning=P.zoning||null;
   if(!zoning||!zoning.zone){
@@ -42,7 +56,7 @@ function generateOptimalMassing(){
       infoEl.style.display='block';
       infoEl.innerHTML='<div style="padding:8px;font-size:11px;color:#4ecdc4;border:1px solid #2a3a3a;border-radius:4px;background:#1a2a2a">'+
         '<div style="font-weight:700;margin-bottom:4px">\uD83D\uDD0D SEARCHING FOR ZONING...</div>'+
-        '<div style="color:#aaa;font-size:10px">No zoning detected at site center. Probing lot polygon vertices for zoning data...</div></div>';
+        '<div style="color:#aaa;font-size:13px">No zoning detected at site center. Probing lot polygon vertices for zoning data...</div></div>';
     }
     // Build sample points: every other vertex + centroid (keep it fast)
     var samplePts=[];
@@ -74,7 +88,7 @@ function _omShowNoZoning(){
     infoEl.style.display='block';
     infoEl.innerHTML='<div style="padding:8px;font-size:11px;color:#e07b6a;border:1px solid #3a2a2a;border-radius:4px;background:#2a1a1a">'+
       '<div style="font-weight:700;margin-bottom:4px">\u26A0 ZONING DATA REQUIRED</div>'+
-      '<div style="color:#aaa;font-size:10px">Cannot generate optimal massing without zoning information.<br>'+
+      '<div style="color:#aaa;font-size:13px">Cannot generate optimal massing without zoning information.<br>'+
       'No zoning was found at any point within the lot polygon.<br><br>'+
       '\u2022 Ensure the lot is within a municipality with ArcGIS zoning data<br>'+
       '\u2022 Try clicking the zoning overlay to manually apply zoning<br>'+
@@ -98,27 +112,157 @@ function _omShowNoZoning(){
  */
 function _insetPolygon(poly, stepFt) {
   if (!poly || poly.length < 3 || stepFt <= 0) return poly;
-  // Count unique vertices (skip closing vertex if it matches first)
-  var cx = 0, cz = 0, n = 0;
-  for (var i = 0; i < poly.length; i++) {
-    if (i === poly.length - 1 && poly[i][0] === poly[0][0] && poly[i][1] === poly[0][1]) continue;
-    cx += poly[i][0]; cz += poly[i][1]; n++;
-  }
-  if (n === 0) return poly;
-  cx /= n; cz /= n;
 
-  var inset = [];
-  for (var i = 0; i < poly.length; i++) {
-    var px = poly[i][0], pz = poly[i][1];
-    var dx = px - cx, dz = pz - cz;
-    var dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist < 0.01) { inset.push([px, pz]); continue; }
-    var scale = Math.max(0.3, (dist - stepFt) / dist);
-    inset.push([
-      Math.round((cx + dx * scale) * 100) / 100,
-      Math.round((cz + dz * scale) * 100) / 100
-    ]);
+  // Strip duplicate closing vertex so we can iterate edges modulo n.
+  var pts = poly.slice();
+  while (pts.length > 1
+    && pts[0][0] === pts[pts.length - 1][0]
+    && pts[0][1] === pts[pts.length - 1][1]) {
+    pts.pop();
   }
+  var n = pts.length;
+  if (n < 3) return poly;
+
+  // Original signed-area magnitude — for fallback sanity check.
+  var origArea2 = 0;
+  for (var i = 0; i < n; i++) {
+    var j = (i + 1) % n;
+    origArea2 += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+  }
+  origArea2 = Math.abs(origArea2);
+
+  // Point-in-polygon test (planar, ray-cast) — used to disambiguate which
+  // perpendicular is "inward". The centroid-direction shortcut FAILS on
+  // concave shapes (L, T, +) because the centroid sits in the notch OUTSIDE
+  // the polygon, which inverts inward/outward for every edge near the
+  // concave corner. Symptom: concave-side tower edges got offset to
+  // OUTSIDE the lot, then turf.intersect clipped them back to the lot
+  // boundary — visible as zero stepback on the inner L frontage.
+  function _pip(px, pz){
+    var inside = false;
+    for (var i = 0, j = n - 1; i < n; j = i++) {
+      var xi = pts[i][0], zi = pts[i][1], xj = pts[j][0], zj = pts[j][1];
+      if (((zi > pz) !== (zj > pz)) && (px < (xj - xi) * (pz - zi) / (zj - zi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  // For each edge i, build its inward-offset line: a base point and unit
+  // direction vector. The line is shifted perpendicular to the edge by stepFt
+  // toward the polygon interior. Preserving each edge's direction keeps the
+  // tower faces parallel to the podium faces.
+  var lines = new Array(n);
+  for (var i = 0; i < n; i++) {
+    var p = pts[i], q = pts[(i + 1) % n];
+    var ex = q[0] - p[0], ez = q[1] - p[1];
+    var len = Math.sqrt(ex * ex + ez * ez);
+    if (len < 0.001) { lines[i] = null; continue; }
+    var dxN = ex / len, dzN = ez / len;
+
+    // Two perpendicular candidates — pick the one whose small probe lands
+    // INSIDE the polygon. Robust for both convex and concave shapes.
+    var n1x = -dzN, n1z = dxN;
+    var n2x =  dzN, n2z = -dxN;
+    var mx = (p[0] + q[0]) / 2, mz = (p[1] + q[1]) / 2;
+    var probeFt = Math.min(0.5, len * 0.25); // small probe — stays in this edge's region
+    var n1Inside = _pip(mx + n1x * probeFt, mz + n1z * probeFt);
+    var nx = n1Inside ? n1x : n2x;
+    var nz = n1Inside ? n1z : n2z;
+
+    lines[i] = {
+      x: p[0] + nx * stepFt,
+      z: p[1] + nz * stepFt,
+      dx: dxN,
+      dz: dzN
+    };
+  }
+
+  // For each vertex i of the inset polygon, intersect line[i-1] with line[i].
+  var insetOpen = [];
+  for (var i = 0; i < n; i++) {
+    var L1 = lines[(i - 1 + n) % n];
+    var L2 = lines[i];
+    if (!L1 || !L2) { insetOpen.push([pts[i][0], pts[i][1]]); continue; }
+    var det = L2.dx * L1.dz - L1.dx * L2.dz;
+    var bx = L2.x - L1.x, bz = L2.z - L1.z;
+    if (Math.abs(det) < 1e-6) {
+      // Adjacent edges parallel — use L2's start point.
+      insetOpen.push([Math.round(L2.x * 100) / 100, Math.round(L2.z * 100) / 100]);
+      continue;
+    }
+    var t1 = (L2.dx * bz - L2.dz * bx) / det;
+    var ix = L1.x + t1 * L1.dx;
+    var iz = L1.z + t1 * L1.dz;
+    insetOpen.push([Math.round(ix * 100) / 100, Math.round(iz * 100) / 100]);
+  }
+
+  // ── Collapse detection ──
+  // If an arm of the polygon is narrower than 2 * stepFt, the offsets of the
+  // two parallel arm walls cross over each other — the resulting "inset edge"
+  // points in the OPPOSITE direction of the original edge. This is the
+  // "tower walls folding into each other" case the user reported.
+  // Detect by checking the dot product of inset edge vs original edge: any
+  // negative value means that edge has been eaten by adjacent offsets.
+  var badEdge = new Array(n);
+  var anyBad = false;
+  for (var i = 0; i < n; i++) {
+    var oDx = pts[(i + 1) % n][0] - pts[i][0];
+    var oDz = pts[(i + 1) % n][1] - pts[i][1];
+    var iDx = insetOpen[(i + 1) % n][0] - insetOpen[i][0];
+    var iDz = insetOpen[(i + 1) % n][1] - insetOpen[i][1];
+    badEdge[i] = (oDx * iDx + oDz * iDz) < 0;
+    if (badEdge[i]) anyBad = true;
+  }
+
+  var resultOpen;
+  if (!anyBad) {
+    resultOpen = insetOpen;
+  } else {
+    // Some edges collapsed (thin arm where parallel walls cross when offset).
+    // Strategy: take the bounding box of the SURVIVING good vertices
+    // (vertices whose adjacent edges are both non-collapsed). For L/T/+
+    // shapes this produces a clean rectangle over the main body, which
+    // matches what the user wants — no kinks, no folded walls, tower
+    // floorplate aligned with the lot's primary axes.
+    var goodVerts = [];
+    for (var i = 0; i < n; i++) {
+      if (!badEdge[(i - 1 + n) % n] && !badEdge[i]) {
+        goodVerts.push(insetOpen[i]);
+      }
+    }
+    var sourceVerts = goodVerts.length >= 3 ? goodVerts : pts;
+    var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (var i = 0; i < sourceVerts.length; i++) {
+      if (sourceVerts[i][0] < minX) minX = sourceVerts[i][0];
+      if (sourceVerts[i][0] > maxX) maxX = sourceVerts[i][0];
+      if (sourceVerts[i][1] < minZ) minZ = sourceVerts[i][1];
+      if (sourceVerts[i][1] > maxZ) maxZ = sourceVerts[i][1];
+    }
+    // If we used the original lot vertices as the source (extreme fallback),
+    // still apply the stepback inset so the tower respects setback rules.
+    if (goodVerts.length < 3) {
+      minX += stepFt; maxX -= stepFt;
+      minZ += stepFt; maxZ -= stepFt;
+    }
+    if (maxX - minX < 30 || maxZ - minZ < 30) return poly;
+    resultOpen = [[minX, minZ], [maxX, minZ], [maxX, maxZ], [minX, maxZ]];
+  }
+
+  // Close the ring (consumers expect first==last like the original lot poly).
+  var inset = resultOpen.slice();
+  inset.push([inset[0][0], inset[0][1]]);
+
+  // Sanity fallback — collapsed area or impossibly large area.
+  if (inset.length < 4) return poly;
+  var newArea2 = 0;
+  for (var i = 0; i < inset.length - 1; i++) {
+    newArea2 += inset[i][0] * inset[i + 1][1] - inset[i + 1][0] * inset[i][1];
+  }
+  newArea2 = Math.abs(newArea2);
+  if (newArea2 < 100 || newArea2 > origArea2 * 1.05) return poly;
+
   return inset;
 }
 
@@ -142,7 +286,7 @@ async function _omGenerateWithAI(zoning, assetClass) {
     infoEl.style.display = 'block';
     infoEl.innerHTML = '<div style="padding:12px;font-size:11px;color:#AEBC46;border:1px solid #3a3a2a;border-radius:4px;background:#1a1a1a">' +
       '<div style="font-weight:700;margin-bottom:4px;font-size:12px">\uD83E\uDDE0 AI DEVELOPER IS ANALYZING YOUR SITE...</div>' +
-      '<div style="color:#aaa;font-size:10px">Claude is studying zoning, comparables, and market context to design the most profitable massing for your lot. This takes 10-20 seconds.</div></div>';
+      '<div style="color:#aaa;font-size:13px">Claude is studying zoning, comparables, and market context to design the most profitable massing for your lot. This takes 10-20 seconds.</div></div>';
   }
 
   // Gather all context for Claude
@@ -262,16 +406,40 @@ async function _omGenerateWithAI(zoning, assetClass) {
 
     console.log('[AI Massing] Claude response:', analysis);
 
-    // Build lot polygon for customPolyLocal (closed ring)
-    var lotPoly = vts.slice();
+    // Build lot polygon for customPolyLocal (closed ring).
+    // CRITICAL: deep-copy each vertex (not vts.slice() which is shallow) so the
+    // volume's customPolyLocal does NOT share inner array references with the
+    // lot's polyVerts. Shared refs cause normalizeLotPolygon to double-shift
+    // the volume vertices each rebuild, drifting the building northwest of the
+    // lot by (dx, dz) every time.
+    var lotPoly = vts.map(function(v){ return [v[0], v[1]]; });
     if (lotPoly.length >= 3 && (lotPoly[0][0] !== lotPoly[lotPoly.length - 1][0] || lotPoly[0][1] !== lotPoly[lotPoly.length - 1][1])) {
-      lotPoly.push(lotPoly[0].slice());
+      lotPoly.push([lotPoly[0][0], lotPoly[0][1]]);
+    }
+
+    // CRITICAL: also build a lat/lng customPoly so realignBuildingToLot can
+    // re-derive customPolyLocal whenever _gpsOrigin shifts (e.g. user redraws
+    // lot at a new location, switches city, or coordinate-origin
+    // normalization runs). Without this, the building visually drifts
+    // relative to the lot — the recurring "building renders north of lot" bug.
+    function _ftToGps(xFt, zFt){
+      if(!P || !P._gpsOrigin) return null;
+      var oLat = P._gpsOrigin.lat, oLng = P._gpsOrigin.lng;
+      var mPerDegLat = 110540;
+      var mPerDegLng = 111320 * Math.cos(oLat * Math.PI / 180);
+      var lng = oLng + (xFt * 0.3048) / mPerDegLng;
+      var lat = oLat - (zFt * 0.3048) / mPerDegLat;   // Z+ = South so subtract
+      return [lng, lat];
+    }
+    var lotPolyGps = null;
+    if(P && P._gpsOrigin){
+      lotPolyGps = lotPoly.map(function(pt){ return _ftToGps(pt[0], pt[1]); });
     }
 
     // ── EXTRACT AI DECISIONS ──
     var podSt = Math.max(2, Math.min(analysis.podium_storeys || 6, 20));
     var twrSt = Math.max(0, Math.min(analysis.tower_storeys || 8, 70));
-    var twrStep = Math.max(5, analysis.tower_stepback || 10);  // min 5ft (with minor variance)
+    var twrStep = Math.max(3, analysis.tower_stepback || 5);   // min 3ft, default 5ft (Toronto MV floor)
     var hasCommGF = analysis.commGF ? 1 : 0;
 
     // ── TWO VOLUMES — podium + tower as separate buildings ──
@@ -334,6 +502,7 @@ async function _omGenerateWithAI(zoning, assetClass) {
       storefrontS: hasCommGF,
       storefrontE: 0, storefrontW: 0,
       customPolyLocal: lotPoly,
+      customPoly: lotPolyGps,        // lat/lng equivalent for realign-on-origin-shift
       customAreaSF: Math.round(areaFt)
     });
 
@@ -364,21 +533,45 @@ async function _omGenerateWithAI(zoning, assetClass) {
         storefrontN: 0,
         storefrontS: 0, storefrontE: 0, storefrontW: 0,
         customPolyLocal: towerPoly,
+        customPoly: (lotPolyGps ? towerPoly.map(function(pt){ return _ftToGps(pt[0], pt[1]); }) : null),
         customAreaSF: towerAreaSF
       });
     }
 
     // Apply setbacks
     var aiSet = analysis.setbacks || {};
-    P.set.front = aiSet.front || 0;
-    P.set.sideE = aiSet.sideE || 18;
-    P.set.sideW = aiSet.sideW || 18;
-    P.set.rear = aiSet.rear || 25;
+    P.set.front = aiSet.front != null ? aiSet.front : 0;
+    P.set.sideE = aiSet.sideE != null ? aiSet.sideE : 18;
+    P.set.sideW = aiSet.sideW != null ? aiSet.sideW : 18;
+    P.set.rear  = aiSet.rear  != null ? aiSet.rear  : 25;
 
     // Apply volumes
     P.vols = aiVols;
-    P.flr.gf = (analysis.floor_heights && analysis.floor_heights.gf) || 15;
-    P.flr.typ = (analysis.floor_heights && analysis.floor_heights.typ) || 10;
+
+    // ── Multi-tower override for large lots on tall-building zones ──
+    // For lots >= ~1 acre (50k sf) on D / CC1-CC4 / RA3+ zoning, replace the
+    // single AI-generated podium+tower with a realistic master plan: continuous
+    // podium + 2-4 separate towers on a grid with 25 m separations. Single-
+    // building blocks at this scale are not how real developments get built.
+    try {
+      if(typeof window.shouldFireMultiTower === 'function' &&
+         typeof window.generateMultiTowerMassing === 'function'){
+        var mt = window.shouldFireMultiTower(lotPoly, zoning);
+        if(mt.fire){
+          console.log('[Multi-tower] Triggered - ' + mt.reason);
+          window.generateMultiTowerMassing(lotPoly, zoning, {
+            towerCount: mt.towerCount,
+            podiumStoreys: Math.max(podSt, 6),
+            towerStoreys: twrSt,
+            hasCommGF: hasCommGF
+          });
+        }
+      }
+    } catch(e){ console.warn('[Multi-tower] dispatch failed:', e); }
+
+    var afh = analysis.floor_heights || {};
+    P.flr.gf = afh.gf != null ? afh.gf : 15;
+    P.flr.typ = afh.typ != null ? afh.typ : 10;
 
     // Rebuild everything
     if (typeof buildLotPanel === 'function') buildLotPanel();
@@ -407,28 +600,28 @@ async function _omGenerateWithAI(zoning, assetClass) {
 
     // Developer reasoning
     resultHTML += '<div style="font-size:11px;color:#ccc;line-height:1.6;margin-bottom:10px;padding:8px;background:#1a2a1a;border:1px solid #2a3a2a;border-radius:4px">' +
-      '<div style="color:#AEBC46;font-weight:700;margin-bottom:4px;font-size:10px">\uD83D\uDCA1 DEVELOPER STRATEGY</div>' +
+      '<div style="color:#AEBC46;font-weight:700;margin-bottom:4px;font-size:13px">\uD83D\uDCA1 DEVELOPER STRATEGY</div>' +
       (typeof escapeHtml === 'function' ? escapeHtml(analysis.reasoning || '') : (analysis.reasoning || '')) + '</div>';
 
     // Volume summary — two volumes: podium + tower
     resultHTML += '<div style="margin-bottom:10px">' +
-      '<div style="color:#AEBC46;font-weight:700;font-size:10px;margin-bottom:4px;letter-spacing:0.5px">\uD83C\uDFD7 BUILDING FORM — ' + (podSt + twrSt) + ' STOREYS</div>' +
-      '<div style="font-size:10px;color:#ccc;padding:6px 8px;background:#2D2D2D;border-radius:3px;margin-bottom:3px;line-height:1.8">' +
+      '<div style="color:#AEBC46;font-weight:700;font-size:13px;margin-bottom:4px;letter-spacing:0.5px">\uD83C\uDFD7 BUILDING FORM — ' + (podSt + twrSt) + ' STOREYS</div>' +
+      '<div style="font-size:13px;color:#ccc;padding:6px 8px;background:#2D2D2D;border-radius:3px;margin-bottom:3px;line-height:1.8">' +
         '<span style="color:#e8c87a;font-weight:700">\u25A0 Vol A — Podium</span> (' + podSt + ' storeys)<br>' +
         'Fills <b>full lot polygon</b> to lot lines \u2022 ' + Math.round(areaFt).toLocaleString() + ' sf plate<br>' +
         (hasCommGF ? 'Retail at grade \u2022 ' : '') + 'Brick + punched windows' +
       '</div>' +
-      (twrSt > 0 ? '<div style="font-size:10px;color:#ccc;padding:6px 8px;background:#2D2D2D;border-radius:3px;margin-bottom:3px;line-height:1.8">' +
+      (twrSt > 0 ? '<div style="font-size:13px;color:#ccc;padding:6px 8px;background:#2D2D2D;border-radius:3px;margin-bottom:3px;line-height:1.8">' +
         '<span style="color:#4ecdc4;font-weight:700">\u25A0 Vol B — Tower</span> (' + twrSt + ' floors above podium)<br>' +
         'Lot polygon <b>inset ' + twrStep + '\'</b> from podium face \u2022 ' + towerAreaSF.toLocaleString() + ' sf plate<br>' +
         'Curtain wall + balconies \u2022 Starts at podium roofline' +
       '</div>' : '') +
-      '<div style="font-size:9px;color:#888;padding:2px 8px">\u2139 L-shaped lot \u2192 L-shaped podium + L-shaped tower</div>' +
+      '<div style="font-size:12px;color:#888;padding:2px 8px">\u2139 L-shaped lot \u2192 L-shaped podium + L-shaped tower</div>' +
       '</div>';
 
     // Variance strategy (if AI provided one)
     if (analysis.variance_strategy) {
-      resultHTML += '<div style="margin-bottom:10px;font-size:10px;color:#ccc;border-left:3px solid #cc8;padding:8px;background:#2a2a1a;border-radius:0 4px 4px 0">' +
+      resultHTML += '<div style="margin-bottom:10px;font-size:13px;color:#ccc;border-left:3px solid #cc8;padding:8px;background:#2a2a1a;border-radius:0 4px 4px 0">' +
         '<strong style="color:#cc8">\u2696 Minor Variance Strategy:</strong><br>' +
         (typeof escapeHtml === 'function' ? escapeHtml(analysis.variance_strategy) : analysis.variance_strategy) + '</div>';
     }
@@ -436,26 +629,26 @@ async function _omGenerateWithAI(zoning, assetClass) {
     // Setbacks applied
     var aiSet = analysis.setbacks || {};
     resultHTML += '<div style="margin-bottom:10px">' +
-      '<div style="color:#AEBC46;font-weight:700;font-size:10px;margin-bottom:4px;letter-spacing:0.5px">\uD83D\uDCCF SETBACKS APPLIED</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;font-size:10px">' +
-        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:8px">FRONT</div><div style="color:#ccc;font-weight:700">' + (aiSet.front || 0) + '\'</div></div>' +
-        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:8px">SIDE E</div><div style="color:#ccc;font-weight:700">' + (aiSet.sideE || 18) + '\'</div></div>' +
-        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:8px">SIDE W</div><div style="color:#ccc;font-weight:700">' + (aiSet.sideW || 18) + '\'</div></div>' +
-        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:8px">REAR</div><div style="color:#ccc;font-weight:700">' + (aiSet.rear || 25) + '\'</div></div>' +
+      '<div style="color:#AEBC46;font-weight:700;font-size:13px;margin-bottom:4px;letter-spacing:0.5px">\uD83D\uDCCF SETBACKS APPLIED</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;font-size:13px">' +
+        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:11px">FRONT</div><div style="color:#ccc;font-weight:700">' + (aiSet.front || 0) + '\'</div></div>' +
+        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:11px">SIDE E</div><div style="color:#ccc;font-weight:700">' + (aiSet.sideE || 18) + '\'</div></div>' +
+        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:11px">SIDE W</div><div style="color:#ccc;font-weight:700">' + (aiSet.sideW || 18) + '\'</div></div>' +
+        '<div style="background:#2D2D2D;padding:4px;border-radius:3px;text-align:center"><div style="color:#888;font-size:11px">REAR</div><div style="color:#ccc;font-weight:700">' + (aiSet.rear || 25) + '\'</div></div>' +
       '</div></div>';
 
     // Metrics
     if (realPF) {
       var achievedFSI = realPF.fsi ? realPF.fsi.toFixed(2) : '?';
       resultHTML += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:10px 0">' +
-        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:9px;color:#888">GFA</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + Math.round(realPF.totalGFA).toLocaleString() + ' sf</div></div>' +
-        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:9px;color:#888">UNITS</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + realPF.totalUnits + '</div></div>' +
-        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:9px;color:#888">FSI</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + achievedFSI + 'x</div></div>' +
+        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:12px;color:#888">GFA</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + Math.round(realPF.totalGFA).toLocaleString() + ' sf</div></div>' +
+        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:12px;color:#888">UNITS</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + realPF.totalUnits + '</div></div>' +
+        '<div style="background:#2D2D2D;padding:8px;border-radius:4px;text-align:center"><div style="font-size:12px;color:#888">FSI</div><div style="font-size:14px;font-weight:700;color:#AEBC46">' + achievedFSI + 'x</div></div>' +
         '</div>';
 
       var profitColor = realPF.margin >= 0 ? '#AEBC46' : '#e07b6a';
       resultHTML += '<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a1a;border:1px solid #333;border-radius:4px;font-size:11px">' +
-        '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:10px">\uD83D\uDCB0 PRO-FORMA SUMMARY</div>' +
+        '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:13px">\uD83D\uDCB0 PRO-FORMA SUMMARY</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">' +
           '<span style="color:#888">Revenue</span><span style="color:#8f8;font-weight:700;text-align:right">' + $m(realPF.totalGrossRev) + '</span>' +
           '<span style="color:#888">Total Cost</span><span style="color:#e8c87a;text-align:right">' + $m(realPF.totalCost) + '</span>' +
@@ -476,7 +669,7 @@ async function _omGenerateWithAI(zoning, assetClass) {
 
     // Precedent justification
     if (analysis.precedent_justification) {
-      resultHTML += '<div style="margin-top:10px;font-size:10px;color:#ccc;border-left:3px solid #AEBC46;padding:8px;background:#1a2a1a;border-radius:0 4px 4px 0">' +
+      resultHTML += '<div style="margin-top:10px;font-size:13px;color:#ccc;border-left:3px solid #AEBC46;padding:8px;background:#1a2a1a;border-radius:0 4px 4px 0">' +
         '<strong style="color:#AEBC46">Precedent Justification:</strong><br>' + (typeof escapeHtml === 'function' ? escapeHtml(analysis.precedent_justification) : analysis.precedent_justification) + '</div>';
     }
 
@@ -515,7 +708,7 @@ async function _omGenerateWithAI(zoning, assetClass) {
     // Fall back to algorithmic on any error
     if (infoEl) {
       infoEl.style.display = 'block';
-      infoEl.innerHTML = '<div style="padding:8px;font-size:10px;color:#cc8;border:1px solid #3a3a2a;border-radius:4px;background:#1a1a1a">' +
+      infoEl.innerHTML = '<div style="padding:8px;font-size:13px;color:#cc8;border:1px solid #3a3a2a;border-radius:4px;background:#1a1a1a">' +
         '\u26A0 AI massing failed (' + (typeof escapeHtml === 'function' ? escapeHtml(err.message) : err.message) + '). Using algorithmic generator...</div>';
     }
     _omGenerate(zoning, assetClass);
@@ -570,7 +763,7 @@ async function _omProbeZoning(samplePts,assetClass){
           '<div><span style="color:#888">Height:</span> <b style="color:#AEBC46">'+(bestZoning.heightLimit?bestZoning.heightLimit+'m':'No overlay')+'</b></div>'+
           '<div><span style="color:#888">Coverage:</span> <b style="color:#AEBC46">'+(bestZoning.coverage?(bestZoning.coverage*100).toFixed(0)+'%':'\u2014')+'</b></div>'+
         '</div>'+
-        '<div style="margin-top:4px;font-size:9px;color:#888;font-style:italic">Detected at lot polygon vertex. Assuming ZBLA will rezone entire assembly to match.</div>';
+        '<div style="margin-top:4px;font-size:12px;color:#888;font-style:italic">Detected at lot polygon vertex. Assuming ZBLA will rezone entire assembly to match.</div>';
     }
     _omGenerate(bestZoning,assetClass);
   } else {
@@ -588,16 +781,32 @@ function _omGenerate(zoning,assetClass){
   var vts=lotVerts();
   if(!vts||vts.length<3) return;
 
+  // ── EARLY DISPATCH: industrial generator handles its own setbacks/coverage ──
+  // Industrial bulk warehouse has fundamentally different geometry rules
+  // (40% coverage target, single-storey 40 ft clear, dock court layout) so it
+  // bypasses the midrise/highrise pipeline entirely. See optimal-massing-industrial.js.
+  if(assetClass === 'industrial'){
+    if(typeof window._omGenerateIndustrial === 'function'){
+      window._omGenerateIndustrial(zoning, vts);
+    } else {
+      console.error('[OM] industrial generator not loaded — check optimal-massing-industrial.js script tag');
+    }
+    return;
+  }
+
   // ── STEP 1: Read the real lot ──
   var areaFt=lotArea();
   var bounds=lotBounds();
   var lotW=bounds.width;
   var lotD=bounds.depth;
 
-  // Build closed polygon for customPolyLocal
-  var lotPoly=vts.slice();
+  // Build closed polygon for customPolyLocal.
+  // Deep-copy each vertex so the volume's customPolyLocal does NOT share
+  // inner array refs with the lot's polyVerts — prevents normalizeLotPolygon
+  // from double-shifting and drifting the building northwest.
+  var lotPoly=vts.map(function(v){ return [v[0], v[1]]; });
   if(lotPoly[0][0]!==lotPoly[lotPoly.length-1][0]||lotPoly[0][1]!==lotPoly[lotPoly.length-1][1]){
-    lotPoly.push(lotPoly[0].slice());
+    lotPoly.push([lotPoly[0][0], lotPoly[0][1]]);
   }
 
   // ── STEP 2: Analyze zoning ──
@@ -623,7 +832,11 @@ function _omGenerate(zoning,assetClass){
   }
 
   // Tower step-back: 3.0m (10ft) on ALL sides above streetwall (Toronto Tall Building Guidelines)
-  var towerStepbackFt=10;
+  // Default reduced from 10ft → 5ft (the Toronto minor-variance minimum). 10ft
+  // is the baseline Tall Building Guidelines stepback but produces visually
+  // aggressive setbacks on narrow lots. Users can dial up via the MASSING tab
+  // BUILDING STEPBACK slider when a project warrants the larger buffer.
+  var towerStepbackFt=5;
 
   // Streetwall: podium height = 80% of ROW width
   // For CR zones on Avenues, typical ROW is 20-27m → streetwall 16-22m → 5-7 storeys
@@ -987,6 +1200,25 @@ function _omGenerate(zoning,assetClass){
   P.set.sideW=setSW;
   P.set.rear=setR;
 
+  // ── Multi-tower override for large lots on tall-building zones ──
+  // Auto-replaces the single block with realistic 2-4 tower master plan when:
+  //   lot >= 50k sf AND zoning supports >=12 storeys or FSI >=2.5
+  try {
+    if(typeof window.shouldFireMultiTower === 'function' &&
+       typeof window.generateMultiTowerMassing === 'function'){
+      var mt = window.shouldFireMultiTower(lotPoly, zoning);
+      if(mt.fire){
+        console.log('[Multi-tower] Triggered (sync path) - ' + mt.reason);
+        window.generateMultiTowerMassing(lotPoly, zoning, {
+          towerCount: mt.towerCount,
+          podiumStoreys: 6,
+          towerStoreys: Math.min(zoning && zoning.maxStoreys ? zoning.maxStoreys - 6 : 25, 50),
+          hasCommGF: 1
+        });
+      }
+    }
+  } catch(e){ console.warn('[Multi-tower] dispatch failed (sync):', e); }
+
   // Turn off angular planes if visible
   if(typeof _angularPlanesVisible!=='undefined'&&_angularPlanesVisible){
     if(typeof toggleAngularPlanes==='function') toggleAngularPlanes();
@@ -1272,10 +1504,37 @@ function _omMidrise(areaFt,lotW,lotD,buildableW,buildableD,asOfRightFSI,asOfRigh
   console.log('ROW est:',estROW+'m → max',maxStoreyFromROW,'storeys (1:1 rule)');
   console.log('FSI-derived storeys:',idealTotalFromFSI,'→ target:',targetStoreys);
 
+  // ── USE LOT POLYGON AS-IS ──
+  // The building MUST stay strictly inside the property line. We use the lot
+  // polygon EXACTLY as drawn — no simplification, no convex hull, no inset.
+  // Any vertex-merging/simplification at concave corners can produce edges
+  // that bow outward beyond the lot, which is not legal. The renderer
+  // artifacts (the white "wall fin") on irregular polygons are addressed by
+  // disabling balconies in the volume config below — they're the actual
+  // source of the visible artifact, not the polygon shape.
+  //
+  // Note: a tiny dedupe (consecutive duplicate vertices) is still applied by
+  // _dedupePolyVerts inside lotVerts() and on save/load — that's pure cleanup
+  // (zero-area edges only) and never changes the polygon's outline.
+  var simplifiedPoly = lotPoly;
+  var simplifiedAreaSF = areaFt;
+  if(simplifiedPoly && simplifiedPoly.length >= 4){
+    var sn = simplifiedPoly[0][0]===simplifiedPoly[simplifiedPoly.length-1][0] && simplifiedPoly[0][1]===simplifiedPoly[simplifiedPoly.length-1][1] ? simplifiedPoly.length-1 : simplifiedPoly.length;
+    var sa = 0;
+    for(var sii = 0; sii < sn; sii++){
+      var sj = (sii+1) % sn;
+      sa += simplifiedPoly[sii][0]*simplifiedPoly[sj][1] - simplifiedPoly[sj][0]*simplifiedPoly[sii][1];
+    }
+    simplifiedAreaSF = Math.abs(sa/2);
+  }
+
   // ── SINGLE VOLUME: Podium + Tower in one ──
   // The renderer handles podium/tower stacking internally via podiumStoreys + stepbackAmt.
-  // Using two overlapping volumes causes rendering bugs (both start at y=0, overlap detection
-  // forces isMidrise=true on the tower, storeys get lost).
+  // BALCONIES DISABLED for optimal massing — on irregular polygons (concave
+  // corners, off-axis walls) the N/S/E/W edge classifier can misalign balconies
+  // and produce visible "wall fins" where balconies protrude inward at concave
+  // corners. User can manually enable balconies later in the volume editor
+  // once they've reviewed the polygon shape.
   var volA={
     name:'A',
     storeys:targetStoreys,
@@ -1285,12 +1544,22 @@ function _omMidrise(areaFt,lotW,lotD,buildableW,buildableD,asOfRightFSI,asOfRigh
     stepbackAmt:stepbackFt,
     gfHeight:0,
     color:'#b8c4d0', commGF:1, windows:1, winSpacing:3,
-    balconies:1, balcEvery:2, balcDepth:4,
-    balcN:1,balcS:1,balcE:0,balcW:0,
+    balconies:0, balcEvery:2, balcDepth:4,
+    balcN:0,balcS:0,balcE:0,balcW:0,
     cladding:'brick',
     storefrontN:1,storefrontS:0,storefrontE:0,storefrontW:0,
-    customPolyLocal:lotPoly,
-    customAreaSF:Math.round(areaFt)
+    customPolyLocal:simplifiedPoly,
+    customPoly: (function(){
+      // lat/lng equivalent so realignBuildingToLot can re-derive customPolyLocal
+      // when _gpsOrigin shifts (fixes "building renders north of lot" bug).
+      if(!P || !P._gpsOrigin || !simplifiedPoly) return null;
+      var oLat=P._gpsOrigin.lat, oLng=P._gpsOrigin.lng;
+      var mPerDegLat=110540, mPerDegLng=111320*Math.cos(oLat*Math.PI/180);
+      return simplifiedPoly.map(function(pt){
+        return [oLng + (pt[0]*0.3048)/mPerDegLng, oLat - (pt[1]*0.3048)/mPerDegLat];
+      });
+    })(),
+    customAreaSF:Math.round(simplifiedAreaSF)
   };
 
   console.log('Midrise: single volume, '+targetStoreys+' storeys (podium:'+podiumStoreys+' + tower:'+towerStoreys+'), stepback:'+stepbackFt+'ft');
@@ -1488,6 +1757,20 @@ function _omHighrise(areaFt,lotW,lotD,buildableW,buildableD,asOfRightFSI,asOfRig
 
   // ── SINGLE VOLUME: Podium + Tower in one ──
   // The renderer handles podium/tower stacking internally via podiumStoreys + stepbackAmt.
+  // Use lot polygon AS-IS (same architectural rule as midrise: building
+  // stays INSIDE the lot, no shape transformations of any kind).
+  var simplifiedPolyHi = lotPoly;
+  var simplifiedAreaHi = areaFt;
+  if(simplifiedPolyHi && simplifiedPolyHi.length >= 4){
+    var snHi = simplifiedPolyHi[0][0]===simplifiedPolyHi[simplifiedPolyHi.length-1][0] && simplifiedPolyHi[0][1]===simplifiedPolyHi[simplifiedPolyHi.length-1][1] ? simplifiedPolyHi.length-1 : simplifiedPolyHi.length;
+    var saHi = 0;
+    for(var siiHi = 0; siiHi < snHi; siiHi++){
+      var sjHi = (siiHi+1) % snHi;
+      saHi += simplifiedPolyHi[siiHi][0]*simplifiedPolyHi[sjHi][1] - simplifiedPolyHi[sjHi][0]*simplifiedPolyHi[siiHi][1];
+    }
+    simplifiedAreaHi = Math.abs(saHi/2);
+  }
+
   var volA={
     name:'A',
     storeys:targetStoreys,
@@ -1497,12 +1780,22 @@ function _omHighrise(areaFt,lotW,lotD,buildableW,buildableD,asOfRightFSI,asOfRig
     stepbackAmt:stepbackFt,
     gfHeight:0,
     color:'#b8c4d0', commGF:1, windows:1, winSpacing:3,
-    balconies:1, balcEvery:2, balcDepth:5,
-    balcN:1,balcS:1,balcE:0,balcW:0,
+    balconies:0, balcEvery:2, balcDepth:5,
+    balcN:0,balcS:0,balcE:0,balcW:0,
     cladding:'brick',
     storefrontN:1,storefrontS:0,storefrontE:0,storefrontW:0,
-    customPolyLocal:lotPoly,
-    customAreaSF:Math.round(areaFt)
+    customPolyLocal:simplifiedPolyHi,
+    customPoly: (function(){
+      // lat/lng equivalent so realignBuildingToLot can re-derive customPolyLocal
+      // when _gpsOrigin shifts (fixes "building renders north of lot" bug).
+      if(!P || !P._gpsOrigin || !simplifiedPolyHi) return null;
+      var oLat=P._gpsOrigin.lat, oLng=P._gpsOrigin.lng;
+      var mPerDegLat=110540, mPerDegLng=111320*Math.cos(oLat*Math.PI/180);
+      return simplifiedPolyHi.map(function(pt){
+        return [oLng + (pt[0]*0.3048)/mPerDegLng, oLat - (pt[1]*0.3048)/mPerDegLat];
+      });
+    })(),
+    customAreaSF:Math.round(simplifiedAreaHi)
   };
 
   console.log('Highrise: single volume, '+targetStoreys+' storeys (podium:'+podiumStoreys+' + tower:'+towerStoreys+'), stepback:'+stepbackFt+'ft');
@@ -1679,7 +1972,7 @@ function showOptimalInfo(config){
   // ── HOW THE OPTIMIZER DECIDED (transparency) ──
   var ctxL={downtown_core:'Downtown Core',major_transit:'Major Transit Corridor',avenue_transit:'Avenue + Transit',avenue:'Avenue',neighbourhood_edge:'Neighbourhood Edge'};
   html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a2a1a;border:1px solid #2a3a2a;border-radius:4px;font-size:11px;line-height:1.6">'+
-    '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:10px;letter-spacing:0.5px">\uD83E\uDDE0 HOW THIS WAS DETERMINED</div>'+
+    '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:13px;letter-spacing:0.5px">\uD83E\uDDE0 HOW THIS WAS DETERMINED</div>'+
     '<div style="color:#ddd">'+
       '<b style="color:#4ecdc4">1. Zoning:</b> '+za.zone+' \u2192 as-of-right FSI '+za.asOfRightFSI+'\u00D7, height '+za.asOfRightHeightM+'m<br>'+
       '<b style="color:#4ecdc4">2. Corridor:</b> '+(ctxL[za.corridorContext]||za.corridorContext)+' \u2192 ZBLA precedents support up to '+za.maxPrecedentStoreys+' storeys<br>'+
@@ -1693,7 +1986,7 @@ function showOptimalInfo(config){
   if(rp){
     var profitColor=displayProfit>0?'#AEBC46':'#e07b6a';
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a1a;border:1px solid #333;border-radius:4px;font-size:11px">'+
-      '<div style="color:#AEBC46;font-weight:700;margin-bottom:8px;font-size:10px;letter-spacing:0.5px">\uD83D\uDCB0 PRO-FORMA SUMMARY <span style="color:#666;font-weight:400;font-size:9px">(matches Pro-Forma tab)</span></div>'+
+      '<div style="color:#AEBC46;font-weight:700;margin-bottom:8px;font-size:13px;letter-spacing:0.5px">\uD83D\uDCB0 PRO-FORMA SUMMARY <span style="color:#666;font-weight:400;font-size:12px">(matches Pro-Forma tab)</span></div>'+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">'+
         '<span style="color:#888">Total GFA</span><span style="color:#AEBC46;font-weight:700;text-align:right">'+displayGFA.toLocaleString()+' sf</span>'+
         '<span style="color:#888">FSI</span><span style="color:#AEBC46;font-weight:700;text-align:right">'+displayFSI+'\u00D7</span>'+
@@ -1720,7 +2013,7 @@ function showOptimalInfo(config){
     var hrHardPSF=hrP.totalGFA>0?Math.round(hrP.totalHard/hrP.totalGFA):0;
     var winColor=cmp.winner==='highrise'?'#AEBC46':'#4ecdc4';
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a1a;border:1px solid #333;border-radius:4px;font-size:11px">'+
-      '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:10px;letter-spacing:0.5px">\u2696 MIDRISE vs HIGHRISE <span style="color:#666;font-weight:400;font-size:9px">(same pfCalc engine as Pro-Forma tab)</span></div>'+
+      '<div style="color:#AEBC46;font-weight:700;margin-bottom:6px;font-size:13px;letter-spacing:0.5px">\u2696 MIDRISE vs HIGHRISE <span style="color:#666;font-weight:400;font-size:12px">(same pfCalc engine as Pro-Forma tab)</span></div>'+
       '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
         '<tr style="color:#888;border-bottom:1px solid #333">'+
           '<th style="text-align:left;padding:3px 0;font-weight:400"></th>'+
@@ -1752,7 +2045,7 @@ function showOptimalInfo(config){
           '<td style="text-align:right;padding:3px 6px;font-weight:700;color:'+(mrP.marginOnCost>=0.15?'#8f8':'#e07b6a')+'">'+Math.round(mrP.marginOnCost*100)+'%</td>'+
           '<td style="text-align:right;font-weight:700;color:'+(hrP.marginOnCost>=0.15?'#8f8':'#e07b6a')+'">'+Math.round(hrP.marginOnCost*100)+'%</td></tr>'+
       '</table>'+
-      '<div style="margin-top:6px;padding:4px 8px;background:'+(cmp.rendered==='highrise'?'#1a2a1a':'#1a2a2a')+';border-radius:3px;font-size:10px;color:'+winColor+';font-weight:700;text-align:center">'+
+      '<div style="margin-top:6px;padding:4px 8px;background:'+(cmp.rendered==='highrise'?'#1a2a1a':'#1a2a2a')+';border-radius:3px;font-size:13px;color:'+winColor+';font-weight:700;text-align:center">'+
         '\u2713 Rendering '+cmp.rendered.toUpperCase()+' (your selected asset class)'+
       '</div>'+
     '</div>';
@@ -1761,14 +2054,14 @@ function showOptimalInfo(config){
   // ── ZONING + APPROVAL ──
   if(za){
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a2a;border:1px solid #2a2a3a;border-radius:4px;font-size:11px">'+
-      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:10px;letter-spacing:0.5px">\uD83D\uDCCB ZONING</div>'+
+      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:13px;letter-spacing:0.5px">\uD83D\uDCCB ZONING</div>'+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px">'+
         '<span style="color:#888">Zone</span><span style="color:#4ecdc4;font-weight:700;text-align:right">'+za.zone+'</span>'+
         '<span style="color:#888">As-of-Right FSI</span><span style="text-align:right">'+za.asOfRightFSI+'\u00D7</span>'+
         '<span style="color:#888">Height Limit</span><span style="text-align:right">'+za.asOfRightHeightM+'m</span>'+
         '<span style="color:#888">Setbacks (ft)</span><span style="text-align:right">F:'+za.derivedSetbacks.front+' S:'+za.derivedSetbacks.sideE+'/'+za.derivedSetbacks.sideW+' R:'+za.derivedSetbacks.rear+'</span>'+
       '</div>'+
-      (za.hasException?'<div style="margin-top:4px;color:#e8c87a;font-size:10px">\u26A0 Exception #'+za.exceptionNo+' applies</div>':'')+
+      (za.hasException?'<div style="margin-top:4px;color:#e8c87a;font-size:13px">\u26A0 Exception #'+za.exceptionNo+' applies</div>':'')+
     '</div>';
   }
 
@@ -1776,17 +2069,17 @@ function showOptimalInfo(config){
   var riskColor=m.approvalRisk==='red'?'#e07b6a':(m.approvalRisk==='yellow'?'#e8c87a':'#AEBC46');
   var riskBg=m.approvalRisk==='red'?'#2a1a1a':(m.approvalRisk==='yellow'?'#2a2a1a':'#1a2a1a');
   html+='<div style="margin-bottom:10px;padding:8px 10px;background:'+riskBg+';border:1px solid #333;border-radius:4px;font-size:11px">'+
-      '<div style="color:'+riskColor+';font-weight:700;margin-bottom:4px;font-size:10px">\uD83D\uDCCA APPROVAL PATHWAY</div>'+
+      '<div style="color:'+riskColor+';font-weight:700;margin-bottom:4px;font-size:13px">\uD83D\uDCCA APPROVAL PATHWAY</div>'+
       '<div style="color:#ddd;font-size:11px">'+m.approvalPath+'</div>'+
-      (m.approvalNotes?'<div style="color:#999;font-size:10px;margin-top:4px">'+m.approvalNotes+'</div>':'')+
+      (m.approvalNotes?'<div style="color:#999;font-size:13px;margin-top:4px">'+m.approvalNotes+'</div>':'')+
     '</div>';
 
   // Approval issues
   if(m.approvalIssues&&m.approvalIssues.length>0){
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#2a1a1a;border:1px solid #3a2a2a;border-radius:4px;font-size:11px">'+
-        '<div style="color:#e8c87a;font-weight:700;margin-bottom:4px;font-size:10px">\u26A0 GUIDELINE ISSUES ('+m.approvalIssues.length+')</div>';
+        '<div style="color:#e8c87a;font-weight:700;margin-bottom:4px;font-size:13px">\u26A0 GUIDELINE ISSUES ('+m.approvalIssues.length+')</div>';
     m.approvalIssues.forEach(function(issue){
-      html+='<div style="color:#aaa;font-size:10px;margin-top:3px">\u2022 '+issue+'</div>';
+      html+='<div style="color:#aaa;font-size:13px;margin-top:3px">\u2022 '+issue+'</div>';
     });
     html+='</div>';
   }
@@ -1795,7 +2088,7 @@ function showOptimalInfo(config){
   var pc=config.planningCosts;
   if(pc){
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a2a;border:1px solid #2a2a3a;border-radius:4px;font-size:11px">'+
-      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:10px;letter-spacing:0.5px">\uD83D\uDCCB REQUIRED APPLICATIONS (Planning Act)</div>';
+      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:13px;letter-spacing:0.5px">\uD83D\uDCCB REQUIRED APPLICATIONS (Planning Act)</div>';
     pc.applications.forEach(function(app){
       html+='<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11px">'+
         '<span style="color:#ddd">'+app.type+' <span style="color:#666">('+app.section+')</span></span>'+
@@ -1808,9 +2101,9 @@ function showOptimalInfo(config){
 
     // Required studies
     html+='<div style="margin-bottom:10px;padding:8px 10px;background:#1a1a2a;border:1px solid #2a2a3a;border-radius:4px;font-size:11px">'+
-      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:10px;letter-spacing:0.5px">\uD83D\uDCD1 REQUIRED STUDIES ('+pc.studies.length+')</div>';
+      '<div style="color:#4ecdc4;font-weight:700;margin-bottom:6px;font-size:13px;letter-spacing:0.5px">\uD83D\uDCD1 REQUIRED STUDIES ('+pc.studies.length+')</div>';
     pc.studies.forEach(function(s){
-      html+='<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px">'+
+      html+='<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:13px">'+
         '<span style="color:#aaa">'+s.name+'</span>'+
         '<span style="color:#ddd">'+$f(s.cost)+'</span></div>';
     });
@@ -1821,7 +2114,7 @@ function showOptimalInfo(config){
       '<span style="color:#ddd;font-weight:700">Total Planning Cost</span>'+
       '<span style="color:#AEBC46;font-weight:700">'+$f(pc.totalPlanningCost)+'</span></div>';
 
-    html+='<div style="margin-top:6px;padding:4px 8px;background:#1a2a2a;border-radius:3px;font-size:10px;color:#4ecdc4;text-align:center">'+
+    html+='<div style="margin-top:6px;padding:4px 8px;background:#1a2a2a;border-radius:3px;font-size:13px;color:#4ecdc4;text-align:center">'+
       'Est. approval timeline: <b>'+pc.timeline.min+'\u2013'+pc.timeline.max+' months</b></div>';
     html+='</div>';
   }
@@ -1829,20 +2122,18 @@ function showOptimalInfo(config){
   // Tower separation warnings
   if(m.towerSepWarnings&&m.towerSepWarnings.length>0){
     m.towerSepWarnings.forEach(function(w){
-      html+='<div style="margin-top:4px;padding:4px 8px;background:#2a1a1a;border:1px solid #3a2a2a;border-radius:4px;font-size:10px;color:#e07b6a">\u26A0 '+w+'</div>';
+      html+='<div style="margin-top:4px;padding:4px 8px;background:#2a1a1a;border:1px solid #3a2a2a;border-radius:4px;font-size:13px;color:#e07b6a">\u26A0 '+w+'</div>';
     });
   }
 
-  // Overlay gets the full detailed view
   if(overlayContent) overlayContent.innerHTML=html;
 
-  // Sidebar gets a compact summary + button to open overlay (uses REAL proforma numbers)
   if(el){
     var profitColor=displayProfit>0?'#AEBC46':'#e07b6a';
     var compact=
-      '<div style="font-size:10px;font-weight:700;color:#AEBC46;letter-spacing:1px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #333">'+
+      '<div style="font-size:13px;font-weight:700;color:#AEBC46;letter-spacing:1px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #333">'+
       '\u26A1 OPTIMAL MASSING GENERATED</div>'+
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:10px;margin-bottom:8px">'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:13px;margin-bottom:8px">'+
         '<span style="color:#888">Storeys</span><span style="color:#AEBC46;font-weight:700;text-align:right">'+m.totalStoreys+'</span>'+
         '<span style="color:#888">GFA</span><span style="color:#AEBC46;font-weight:700;text-align:right">'+displayGFA.toLocaleString()+' sf</span>'+
         '<span style="color:#888">FSI</span><span style="color:#AEBC46;font-weight:700;text-align:right">'+displayFSI+'\u00D7</span>'+
@@ -1856,5 +2147,3 @@ function showOptimalInfo(config){
     el.innerHTML=compact;
   }
 }
-
-// ═══════════════════════════════════════════════════════════

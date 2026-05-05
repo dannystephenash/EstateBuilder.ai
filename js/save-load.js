@@ -4,6 +4,11 @@
 // ═══════════════════════════════════════════════════════════
 const STORAGE_KEY = 'oleadev-massing-projects';
 const AUTOSAVE_KEY = 'oleadev-massing-autosave';
+// Rolling backup: previous N autosaves, newest first. Protects against a corrupt
+// primary autosave (quota overflow mid-write, manual tampering, bad JSON, etc.)
+// and gives the user a way to recover recent work if the latest state is bad.
+const AUTOSAVE_HISTORY_KEY = 'oleadev-massing-autosave-history';
+const AUTOSAVE_HISTORY_MAX = 25;
 
 function getProjects(){
   try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
@@ -11,18 +16,65 @@ function getProjects(){
 }
 function setProjects(obj){ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }
 
-/** Deep-clones the entire P object into a plain serializable state for saving/export. */
+/** Deep-clones the entire P object into a plain serializable state for saving/export.
+ *  Every nested object/array is deep-cloned via JSON round-trip so there's no risk
+ *  of live references leaking into the saved state — critical for customPolyLocal
+ *  (the building polygon coordinates) which is an array of arrays. Without deep
+ *  clone, a shallow copy of a volume would share its polygon array with the live
+ *  P.vols, and any later edit would retroactively mutate the "saved" data.
+ */
 function getState(){
   if(!P.comparables) P.comparables=[];
-  return { projectName:P.projectName, projectType:P.projectType||'midrise', lot:JSON.parse(JSON.stringify(P.lot)), set:{...P.set}, flr:{...P.flr}, vols:P.vols.map(v=>({...v})),
-    pf:JSON.parse(JSON.stringify(P.pf)), core:JSON.parse(JSON.stringify(P.core)),
-    roads:JSON.parse(JSON.stringify(P.roads)), landscape:JSON.parse(JSON.stringify(P.landscape)),
-    unitPlan:JSON.parse(JSON.stringify(P.unitPlan)),
-    comparables:JSON.parse(JSON.stringify(P.comparables)),
-    siteCoords:P.siteCoords?{...P.siteCoords}:null,
+  const deep = obj => (obj == null ? obj : JSON.parse(JSON.stringify(obj)));
+  // Sanitize polygons: strip consecutive duplicate vertices that the site-map
+  // tool / GPS import / parcel picker can produce. Without this, a degenerate
+  // [0,0]→[0,0] edge in the lot polygon propagates into every volume that uses
+  // customPolyLocal (Optimal Massing in particular) and breaks the 3D renderer
+  // (missing curtain wall panels, broken balconies). Cleaning at save time
+  // means existing corrupt projects self-heal on the next autosave.
+  const cleanState = {
+    projectName:P.projectName,
+    projectType:P.projectType||'midrise',
+    lot:deep(P.lot),
+    set:deep(P.set),
+    flr:deep(P.flr),
+    vols:deep(P.vols),              // was P.vols.map(v=>({...v})) — shallow copy risk
+    pf:deep(P.pf),
+    core:deep(P.core),
+    roads:deep(P.roads),
+    landscape:deep(P.landscape),
+    unitPlan:deep(P.unitPlan),
+    comparables:deep(P.comparables),
+    siteCoords:deep(P.siteCoords),
     siteAddress:P.siteAddress||'',
-    zoning:P.zoning||null,
-    smVolumesGPS:P.smVolumesGPS?JSON.parse(JSON.stringify(P.smVolumesGPS)):null };
+    gpsOrigin:P._gpsOrigin ? {lng:P._gpsOrigin.lng, lat:P._gpsOrigin.lat} : null,
+    zoning:deep(P.zoning),
+    smVolumesGPS:deep(P.smVolumesGPS),
+    // ── Industrial-specific persistence ─────────────────────────────────
+    // Without these, refreshing the page after generating an industrial
+    // building would lose the asset-class label, surface zones (parking,
+    // truck court, dock doors, driveway, landscape), the longest-edge
+    // rotation, and the detected front-street edge — forcing the user
+    // to clear the parcel and regenerate from scratch every refresh.
+    assetClass:P.assetClass||null,
+    industrialSurfaces:deep(P.industrialSurfaces),
+    industrialRotation:deep(P._industrialRotation),
+    frontStreetEdge:(typeof P._frontStreetEdge === 'number') ? P._frontStreetEdge : null
+  };
+  // De-dupe the lot polygon and every volume's customPolyLocal
+  if(typeof _dedupePolyVerts === 'function'){
+    if(cleanState.lot && Array.isArray(cleanState.lot.polyVerts) && cleanState.lot.polyVerts.length >= 3){
+      cleanState.lot.polyVerts = _dedupePolyVerts(cleanState.lot.polyVerts);
+    }
+    if(Array.isArray(cleanState.vols)){
+      cleanState.vols.forEach(v => {
+        if(v && Array.isArray(v.customPolyLocal) && v.customPolyLocal.length >= 3){
+          v.customPolyLocal = _dedupePolyVerts(v.customPolyLocal);
+        }
+      });
+    }
+  }
+  return cleanState;
 }
 
 /**
@@ -30,13 +82,29 @@ function getState(){
  * @param {Object} state - Saved project state (from getState() or imported JSON)
  */
 function applyState(state){
+  // Sanitize incoming polygons FIRST — strips consecutive duplicate vertices.
+  // Same defensive pass as getState() does on save. Required for older saved
+  // projects that were stored before the de-dupe was added (their bad lot
+  // polygon would otherwise still produce broken renderings).
+  if(typeof _dedupePolyVerts === 'function'){
+    if(state.lot && Array.isArray(state.lot.polyVerts) && state.lot.polyVerts.length >= 3){
+      state.lot.polyVerts = _dedupePolyVerts(state.lot.polyVerts);
+    }
+    if(Array.isArray(state.vols)){
+      state.vols.forEach(v => {
+        if(v && Array.isArray(v.customPolyLocal) && v.customPolyLocal.length >= 3){
+          v.customPolyLocal = _dedupePolyVerts(v.customPolyLocal);
+        }
+      });
+    }
+  }
   // Merge lot/set/flr — keeps defaults for any missing keys
   if(state.lot) Object.keys(state.lot).forEach(k=>{ if(state.lot[k]!==undefined) P.lot[k]=state.lot[k]; });
   if(state.set) Object.keys(state.set).forEach(k=>{ if(state.set[k]!==undefined) P.set[k]=state.set[k]; });
   if(state.flr) Object.keys(state.flr).forEach(k=>{ if(state.flr[k]!==undefined) P.flr[k]=state.flr[k]; });
-  // Migrate: clamp floor heights to residential ranges (old industrial data may have 40ft)
-  if(P.flr.gf>25) P.flr.gf=15;
-  if(P.flr.typ>15) P.flr.typ=10;
+  // Clamp floor heights to valid residential ranges (prevent div-by-zero and nonsense)
+  if(P.flr.gf>25||P.flr.gf<8) P.flr.gf=15;
+  if(P.flr.typ>15||P.flr.typ<7) P.flr.typ=10;
   // Volumes — ensure every volume has all expected keys with defaults
   if(state.vols) P.vols = state.vols.map(v=>{
     const def={storeys:4,startEg:0,depth:50,width:65,offEast:0,offWest:0,angle:0,
@@ -117,15 +185,59 @@ function applyState(state){
   }
   // Project type
   if(state.projectType) P.projectType=state.projectType;
+  // Asset class — used by industrial rendering pipeline. Mirrors projectType.
+  // Restore from saved state OR fall back to projectType so older saves still work.
+  if(state.assetClass) P.assetClass=state.assetClass;
+  else if(P.projectType==='industrial') P.assetClass='industrial';
   const ptSel=document.getElementById('project-type-select');
-  if(ptSel) ptSel.value=P.projectType||'midrise';
+  if(ptSel){
+    // The dropdown's value is the source of truth for "current class". When we
+    // restore a saved industrial project the dropdown was previously set to
+    // 'midrise' by the renderer's default — push the saved value back.
+    var pv = P.assetClass || P.projectType || 'midrise';
+    ptSel.value = pv;
+    // Keep both fields in lockstep
+    P.projectType = pv;
+    if(pv === 'industrial') P.assetClass = 'industrial';
+  }
+  // ── Industrial site-plan persistence ───────────────────────────────────
+  // Surface zones (parking, truck court, dock doors, driveway, landscape),
+  // building rotation pivot/angle, and detected front-street edge. Without
+  // these the user has to clear the parcel and regenerate every refresh.
+  if(Array.isArray(state.industrialSurfaces)) P.industrialSurfaces = state.industrialSurfaces;
+  if(state.industrialRotation && typeof state.industrialRotation === 'object'){
+    P._industrialRotation = state.industrialRotation;
+  }
+  if(typeof state.frontStreetEdge === 'number') P._frontStreetEdge = state.frontStreetEdge;
   // Project name
   if(state.projectName) P.projectName=state.projectName;
   if(state.comparables) P.comparables=state.comparables;
   if(state.siteCoords) P.siteCoords=state.siteCoords;
   if(state.siteAddress) P.siteAddress=state.siteAddress;
+  // Restore GPS origin for satellite ground texture & context buildings
+  if(state.gpsOrigin) P._gpsOrigin=state.gpsOrigin;
+  // Fallback: derive GPS origin from saved lot GPS vertices (northernmost vertex)
+  if(!P._gpsOrigin && P.lot && P.lot.gpsVerts && P.lot.gpsVerts.length >= 3){
+    var _verts = P.lot.gpsVerts;
+    var _northIdx = 0;
+    for(var _i=1;_i<_verts.length;_i++){ if(_verts[_i][1]>_verts[_northIdx][1]) _northIdx=_i; }
+    P._gpsOrigin = {lng: _verts[_northIdx][0], lat: _verts[_northIdx][1]};
+  }
   if(state.zoning) P.zoning=state.zoning;
   if(state.smVolumesGPS) P.smVolumesGPS=state.smVolumesGPS;
+
+  /* Auto-normalise the lot polygon so the project convention "origin =
+     northernmost vertex, all polyVerts.z >= 0" is enforced for any project
+     loaded from save data. Older saves and parcel-picker outputs sometimes
+     violate this convention, which causes downstream alignment issues
+     (context buildings, infra rendering) for irregular lots. The function
+     also shifts every volume's customPolyLocal by the same delta so the
+     building stays anchored to the same lat/lng. */
+  if(typeof normalizeLotPolygon === 'function'){
+    try { normalizeLotPolygon(); }
+    catch(e){ console.warn('[save-load] normalizeLotPolygon failed:', e); }
+  }
+
   const titleEl=document.getElementById('project-title');
   if(titleEl){
     titleEl.textContent=P.projectName||'Untitled Project';
@@ -145,12 +257,41 @@ function applyState(state){
 var _autoSaveTimer = null;
 var _autoSaveLastFlush = 0;
 var _autoSaveQuotaWarned = false;
+function _pushAutoSaveHistory(serialized){
+  // Roll the previous primary autosave into the history ring. History is
+  // capped at AUTOSAVE_HISTORY_MAX entries, newest first.
+  try{
+    const prev = localStorage.getItem(AUTOSAVE_KEY);
+    if(!prev) return;
+    // Don't duplicate history entries if nothing has changed
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem(AUTOSAVE_HISTORY_KEY) || '[]') || []; } catch(e){ history = []; }
+    if(history.length > 0 && history[0].json === prev) return;       // no change
+    if(serialized && serialized === prev) return;                     // no change (early exit)
+    history.unshift({ json: prev, savedAt: Date.now() });
+    if(history.length > AUTOSAVE_HISTORY_MAX) history = history.slice(0, AUTOSAVE_HISTORY_MAX);
+    localStorage.setItem(AUTOSAVE_HISTORY_KEY, JSON.stringify(history));
+  } catch(e){
+    // Quota may be exceeded for the history ring — fail silently, primary
+    // save still works (this is just the safety-net backup).
+  }
+}
+
 function _autoSaveNow(){
   _autoSaveTimer = null;
+  // Honour Clear Lot's kill switch — once the user clicks Clear Lot we do
+  // NOT want any autosave to fire (debounced timer, beforeunload flush, etc.)
+  // and re-write the data we just deleted.
+  if(typeof window !== 'undefined' && window.__suppressAutoSave) return;
   _autoSaveLastFlush = Date.now();
   try{
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(getState()));
+    const serialized = JSON.stringify(getState());
+    // Push the previous primary into history BEFORE overwriting it, so the
+    // user always has N recent saves to roll back to if the newest corrupts.
+    _pushAutoSaveHistory(serialized);
+    localStorage.setItem(AUTOSAVE_KEY, serialized);
     _autoSaveQuotaWarned = false;
+    try { _updateUndoBtnState(); } catch(e){}
   } catch(e){
     // localStorage quota exceeded or storage disabled — warn user once
     if(!_autoSaveQuotaWarned){
@@ -168,6 +309,8 @@ function _autoSaveNow(){
   }
 }
 function autoSave(){
+  // Skip entirely if Clear Lot has set the kill switch
+  if(typeof window !== 'undefined' && window.__suppressAutoSave) return;
   // If 2+ seconds have passed since last actual save, force a save NOW for safety
   if(Date.now() - _autoSaveLastFlush > 2000 && !_autoSaveTimer){
     _autoSaveNow();
@@ -186,18 +329,145 @@ try {
 
 /**
  * Loads last auto-saved state from localStorage on startup. Restores P and UI.
+ * Tries the primary autosave first; if it's missing/corrupt, walks the rolling
+ * backup history (newest first) and restores from the first one that parses.
+ * Sets window._autoLoadResult for the caller (sitemap-core.js) to display a
+ * toast so the user knows their work was restored (and from which source).
  * @returns {boolean} True if a saved state was found and applied
  */
 function autoLoad(){
+  // Try primary first
   try{
     const raw = localStorage.getItem(AUTOSAVE_KEY);
     if(raw){
       const state = JSON.parse(raw);
       applyState(state);
+      window._autoLoadResult = { source: 'primary', savedAt: null };
       return true;
     }
-  }catch(e){}
+  }catch(e){
+    console.warn('[autoLoad] Primary autosave unreadable:', e && e.message);
+  }
+  // Primary missing or corrupt — try rolling backup history
+  try{
+    const histRaw = localStorage.getItem(AUTOSAVE_HISTORY_KEY);
+    if(histRaw){
+      const history = JSON.parse(histRaw) || [];
+      for(let i = 0; i < history.length; i++){
+        const entry = history[i];
+        if(!entry || !entry.json) continue;
+        try{
+          const state = JSON.parse(entry.json);
+          applyState(state);
+          window._autoLoadResult = { source: 'backup', savedAt: entry.savedAt, index: i };
+          console.warn('[autoLoad] Recovered from backup #'+(i+1)+' saved at '+new Date(entry.savedAt).toLocaleString());
+          return true;
+        } catch(parseErr){
+          // This history entry is corrupt too, try the next one
+        }
+      }
+    }
+  } catch(e){}
+  window._autoLoadResult = { source: 'none' };
   return false;
+}
+
+/**
+ * User-facing: list available autosave backups for recovery. Each entry shows
+ * the timestamp. Used by a future recovery UI / manual rollback.
+ * @returns {Array<{index:number, savedAt:number, label:string}>}
+ */
+function listAutoSaveBackups(){
+  try{
+    const histRaw = localStorage.getItem(AUTOSAVE_HISTORY_KEY);
+    const history = histRaw ? JSON.parse(histRaw) : [];
+    return history.map((e, i) => ({
+      index: i,
+      savedAt: e.savedAt,
+      label: new Date(e.savedAt).toLocaleString()
+    }));
+  } catch(e){ return []; }
+}
+
+/**
+ * Undo the last change. Pops the most recent entry from the autosave history,
+ * writes it as the new primary autosave, and reloads the page so autoLoad
+ * picks up the restored state. The reload guarantees a clean redraw of the
+ * 3D scene, sitemap markers, panels, and pro-forma — all in sync. Up to
+ * AUTOSAVE_HISTORY_MAX undo steps available (one per autosave checkpoint).
+ */
+function siteUndo(){
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(AUTOSAVE_HISTORY_KEY) || '[]') || []; } catch(e){}
+  if(history.length === 0){
+    showSaveStatus('Nothing to undo', '#888');
+    var btn = document.getElementById('btn-site-undo');
+    if(btn){ btn.style.opacity = '0.4'; btn.style.pointerEvents = 'none'; }
+    return;
+  }
+  // Pop the most recent backup (newest first).
+  const entry = history.shift();
+  if(!entry || !entry.json){ showSaveStatus('Nothing to undo', '#888'); return; }
+  // Suppress autosave during reload so an in-flight beforeunload save can't
+  // overwrite the restored state with the current (about-to-be-undone) state.
+  if(typeof window !== 'undefined') window.__suppressAutoSave = true;
+  try {
+    localStorage.setItem(AUTOSAVE_HISTORY_KEY, JSON.stringify(history));
+    localStorage.setItem(AUTOSAVE_KEY, entry.json);
+  } catch(e){
+    if(typeof window !== 'undefined') window.__suppressAutoSave = false;
+    showSaveStatus('Undo failed: storage error', '#c44');
+    return;
+  }
+  // Reload — autoLoad reads from AUTOSAVE_KEY, which now holds the previous state.
+  setTimeout(function(){
+    try { window.location.reload(); }
+    catch(e){ window.location.href = window.location.pathname + '?undo=' + Date.now(); }
+  }, 30);
+}
+
+/**
+ * Update the UNDO button's enabled/disabled visual state based on whether
+ * there's anything in the autosave history. Called on init + after autosaves.
+ */
+function _updateUndoBtnState(){
+  var btn = document.getElementById('btn-site-undo');
+  if(!btn) return;
+  var count = 0;
+  try { count = (JSON.parse(localStorage.getItem(AUTOSAVE_HISTORY_KEY) || '[]') || []).length; } catch(e){}
+  if(count > 0){
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+    btn.title = 'Undo last change (' + count + ' available)';
+  } else {
+    btn.style.opacity = '0.4';
+    btn.style.pointerEvents = 'none';
+    btn.title = 'Nothing to undo';
+  }
+}
+
+/**
+ * Manually restore a backup by its history index (0 = most recent backup).
+ * @param {number} index
+ */
+function restoreAutoSaveBackup(index){
+  try{
+    const histRaw = localStorage.getItem(AUTOSAVE_HISTORY_KEY);
+    const history = histRaw ? JSON.parse(histRaw) : [];
+    const entry = history[index];
+    if(!entry || !entry.json){ showSaveStatus('⚠ Backup not found', '#c44'); return false; }
+    const state = JSON.parse(entry.json);
+    applyState(state);
+    if(typeof buildLotPanel==='function') buildLotPanel();
+    if(typeof buildSetbackPanel==='function') buildSetbackPanel();
+    if(typeof buildRoadsPanel==='function') buildRoadsPanel();
+    if(typeof buildLandscapePanel==='function') buildLandscapePanel();
+    if(typeof buildFloorPanel==='function') buildFloorPanel();
+    if(typeof buildVolPanel==='function') buildVolPanel();
+    if(typeof rebuildAll==='function') rebuildAll();
+    showSaveStatus('↶ Restored backup from '+new Date(entry.savedAt).toLocaleString(), '#6a6');
+    return true;
+  } catch(e){ showSaveStatus('⚠ Restore failed: '+(e&&e.message), '#c44'); return false; }
 }
 
 function showSaveStatus(msg, color){
@@ -350,4 +620,3 @@ function resetToDefaults(){
   rebuildAll();
   showSaveStatus('↩ Reset to defaults', '#aab');
 }
-

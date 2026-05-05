@@ -1,6 +1,7 @@
+// cache-buster: 20260504k
 // renderer.js — 3D scene init, orbit controls, camera, views, dispose
 let scene,camera,renderer,controls;
-const groups={lot:null,building:null,labels:null,env:null,setbacks:null};
+const groups={lot:null,building:null,labels:null,env:null,setbacks:null,industrial_surfaces:null,context:null};
 
 /**
  * Initializes the Three.js scene, camera, renderer, lighting rig, sky dome, and orbit controls.
@@ -12,9 +13,9 @@ function initThree(){
 
   scene=new THREE.Scene();
   scene.background=new THREE.Color(0x12151e);
-  scene.fog=new THREE.FogExp2(0x12151e,0.0007);
+  scene.fog=new THREE.FogExp2(0x12151e,0.00025);
 
-  camera=new THREE.PerspectiveCamera(50,wrap.clientWidth/wrap.clientHeight,0.5,500);
+  camera=new THREE.PerspectiveCamera(50,wrap.clientWidth/wrap.clientHeight,0.5,4000);
   renderer=new THREE.WebGLRenderer({canvas:c,antialias:true,preserveDrawingBuffer:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setSize(wrap.clientWidth,wrap.clientHeight);
@@ -886,7 +887,9 @@ function initOrbit(el){
         }
       }
     }
-    orb.dragging=true;orb.btn=e.button;orb.px=e.clientX;orb.py=e.clientY;e.preventDefault();
+    orb.dragging=true;orb.btn=e.button;orb.px=e.clientX;orb.py=e.clientY;
+    orb.panMode = (e.button === 1) || (e.button === 2) || (e.button === 0 && e.shiftKey);
+    e.preventDefault();
   });
 
   window.addEventListener('mousemove',e=>{
@@ -1060,16 +1063,20 @@ function initOrbit(el){
       }catch(err){ _drag.active=false; console.warn('Drag error:',err); }
       return;
     }
-    // Normal orbit
+    // Normal orbit / pan
     if(!orb.dragging)return;
     const dx=e.clientX-orb.px, dy=e.clientY-orb.py;
     orb.px=e.clientX;orb.py=e.clientY;
-    if(orb.btn===0){orb.theta-=dx*0.005;orb.phi=Math.max(0.1,Math.min(Math.PI/2-0.01,orb.phi-dy*0.005))}
-    if(orb.btn===2){
+    const isPan = orb.panMode || orb.btn === 2;
+    if(isPan){
       const right=new THREE.Vector3(-Math.cos(orb.theta),0,Math.sin(orb.theta));
       const up=new THREE.Vector3(0,1,0);
-      orb.target.addScaledVector(right,dx*0.05);
-      orb.target.addScaledVector(up,dy*0.05);
+      const speed = orb.dist * 0.0015;
+      orb.target.addScaledVector(right, dx * speed);
+      orb.target.addScaledVector(up,    dy * speed);
+    } else if(orb.btn === 0){
+      orb.theta -= dx * 0.005;
+      orb.phi = Math.max(0.1, Math.min(Math.PI/2 - 0.01, orb.phi - dy * 0.005));
     }
     updateCam();
   });
@@ -1180,10 +1187,55 @@ function initOrbit(el){
     }
   });
 
-  el.addEventListener('wheel',e=>{orb.dist=Math.max(10,Math.min(200,orb.dist+e.deltaY*0.05));updateCam();e.preventDefault()},{passive:false});
+  el.addEventListener('wheel',e=>{
+    orb.dist = Math.max(5, Math.min(800, orb.dist + e.deltaY * 0.05));
+    updateCam();
+    e.preventDefault();
+  },{passive:false});
   el.addEventListener('contextmenu',e=>e.preventDefault());
-  // Escape cancels placement mode
-  window.addEventListener('keydown',e=>{if(e.key==='Escape'&&_placeMode.active)_cancelPlace();});
+
+  function _isTypingTarget(){
+    var a = document.activeElement;
+    if(!a) return false;
+    var tag = a.tagName;
+    if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if(a.isContentEditable) return true;
+    return false;
+  }
+  function _siteplanCanvasVisible(){ return el && el.offsetParent !== null; }
+  window.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && _placeMode.active){ _cancelPlace(); return; }
+    if(e.ctrlKey || e.metaKey || e.altKey) return;
+    if(_isTypingTarget()) return;
+    if(!_siteplanCanvasVisible()) return;
+    if(_drag.active || orb.dragging || _ph.drag.active || _poly3D.drag.active) return;
+    var k = e.key;
+    var step = (orb.dist * 0.04) * (e.shiftKey ? 5 : 1);
+    var right = new THREE.Vector3(-Math.cos(orb.theta), 0, Math.sin(orb.theta));
+    var fwd   = new THREE.Vector3(-Math.sin(orb.theta), 0, -Math.cos(orb.theta));
+    var consumed = true;
+    if(k === 'ArrowLeft'  || k === 'a' || k === 'A'){ orb.target.addScaledVector(right,  step); }
+    else if(k === 'ArrowRight' || k === 'd' || k === 'D'){ orb.target.addScaledVector(right, -step); }
+    else if(k === 'ArrowUp'    || k === 'w' || k === 'W'){ orb.target.addScaledVector(fwd,    step); }
+    else if(k === 'ArrowDown'  || k === 's' || k === 'S'){ orb.target.addScaledVector(fwd,   -step); }
+    else if(k === '=' || k === '+'){ orb.dist = Math.max(5, orb.dist - step * 0.5); }
+    else if(k === '-' || k === '_'){ orb.dist = Math.min(800, orb.dist + step * 0.5); }
+    else if(k === 'r' || k === 'R'){ if(typeof setView === 'function') setView('perspective'); else consumed = false; }
+    else if(k === 'f' || k === 'F'){ if(typeof setView === 'function') setView('aerial');      else consumed = false; }
+    else { consumed = false; }
+    if(consumed){ updateCam(); e.preventDefault(); }
+  });
+
+  try {
+    if(!localStorage.getItem('eb_siteplan_controls_hint_v1')){
+      var _onceHint = function(){
+        try { if(typeof smShowToast === 'function') smShowToast('Site Plan controls: drag = orbit, Shift+drag or right-drag = pan, arrows/WASD = pan, +/- = zoom, R = reset, F = top-down', '#3a5a8a'); } catch(e){}
+        try { localStorage.setItem('eb_siteplan_controls_hint_v1', '1'); } catch(e){}
+        el.removeEventListener('mouseenter', _onceHint);
+      };
+      el.addEventListener('mouseenter', _onceHint);
+    }
+  } catch(e){}
 }
 function updateCam(){
   const x=orb.target.x+orb.dist*Math.sin(orb.theta)*Math.cos(orb.phi);

@@ -1,5 +1,22 @@
 // sitemap-volumes.js — Building volumes, shape editing, volume panel
 // ═══════════════════════════════════════════════════════════════════════════════════
+
+// Globals for volume drawing state. Declared here because they are used across
+// sitemap-volumes.js, sitemap-lot.js, sitemap-parcel-picker.js, and
+// sitemap-zoning.js. Original lived in the monolithic sitemap.js.bak; lost
+// during modularization, restored here so file load order produces a valid
+// global state on first reference.
+if(typeof smBldgDrawing === 'undefined') var smBldgDrawing = false;
+if(typeof smBldgDrawPts === 'undefined') var smBldgDrawPts = [];
+// Restore additional volume globals lost in the same modularization (sitemap.js.bak 865-901)
+if(typeof smVolumes === 'undefined') var smVolumes = [];
+if(typeof smVolNextId === 'undefined') var smVolNextId = 1;
+if(typeof smSelectedVolId === 'undefined') var smSelectedVolId = null;
+if(typeof smVolColors === 'undefined') var smVolColors = ['#5588bb','#77aa99','#aa7788','#8877aa','#bb8855','#55aa77','#aa5577','#7788bb'];
+if(typeof smBldgDrawMarkers === 'undefined') var smBldgDrawMarkers = [];
+if(typeof smBldgDrawLine === 'undefined') var smBldgDrawLine = null;
+
+
 function smDrawBuilding(){
   if(!smLotData||!smMap)return alert('Draw a lot first');
   if(smBldgDrawing){smCancelBldgDraw();return;}
@@ -96,6 +113,39 @@ function smCloseBldgPoly(){
     balcFront:1, balcBack:1, balcLeft:0, balcRight:0,
     customPoly:coords, customAreaSF:Math.round(areaSqFt)
   };
+  // ── INDUSTRIAL ASSET CLASS OVERRIDE ─────────────────────────────────────
+  //   When the user has chosen 'industrial' from the asset-class selector,
+  //   replace the residential defaults (storeys=8, balconies, windows, brick
+  //   ground floor) with industrial Class A defaults BEFORE the volume is
+  //   pushed into smVolumes / synced to P.vols. Also auto-generate the
+  //   surface zones (truck court, dock apron, dock doors, trailer/car
+  //   stripes, parking) around the polygon's bounding box so the user
+  //   sees a complete industrial site plan immediately.
+  try {
+    var __selEl = document.getElementById('project-type-select');
+    var __cls = __selEl ? __selEl.value : 'midrise';
+    if(__cls === 'industrial'){
+      vol.kind        = 'warehouse';
+      vol.industrial  = true;
+      vol.storeys     = 1;
+      vol.gfHt        = 40;
+      vol.totalHt     = 40;
+      vol.storeys     = 1;
+      vol.floorHt     = 40;
+      vol.windows     = 0;
+      vol.balconies   = 0;
+      vol.commGF      = 0;
+      vol.commGF      = 0;
+      vol.windows     = 0;
+      vol.balconies   = 0;
+      vol.balcFront   = 0;
+      vol.balcBack    = 0;
+      vol.balcLeft    = 0;
+      vol.balcRight   = 0;
+      vol.color       = '#cfc8b8';   // tilt-up concrete tone
+      console.log('[Industrial] Site Map polygon → warehouse vol — ' + vol.widthFt + ' x ' + vol.depthFt + ' ft, ' + vol.customAreaSF.toLocaleString() + ' sf');
+    }
+  } catch(__e){}
   smConformEdges(vol); // conform edges to nearby lot/building edges
   smVolumes.push(vol);
   smSelectedVolId=vol.id;
@@ -103,6 +153,59 @@ function smCloseBldgPoly(){
   smDrawVolume(vol);
   smRenderVolPanel();
   smAutoSync();
+  // Industrial asset class: defer surface-zone generation slightly so smAutoSync
+  // has finished copying smVolumes → P.vols. The hook reads vol.kind from P.vols.
+  try {
+    var __selEl2 = document.getElementById('project-type-select');
+    if(__selEl2 && __selEl2.value === 'industrial'){
+      setTimeout(function(){
+        try {
+          if(typeof P === 'undefined' || !P || !Array.isArray(P.vols)) return;
+          if(typeof window._industrialBuildSurfaceZones !== 'function') return;
+          // Find warehouse vol in P.vols (the just-synced one)
+          var __wh = null;
+          for(var __i = P.vols.length - 1; __i >= 0; __i--){
+            if(P.vols[__i] && (P.vols[__i].kind === 'warehouse' || P.vols[__i].industrial)){
+              __wh = P.vols[__i]; break;
+            }
+          }
+          // If smAutoSync didn't preserve our flags, force them on the most-recent vol
+          if(!__wh && P.vols.length){
+            __wh = P.vols[P.vols.length - 1];
+            if(__wh){
+              __wh.kind = 'warehouse';
+              __wh.industrial = true;
+              __wh.storeys = 1;
+              __wh.floorHt = 40;
+              __wh.gfHt = 40;
+              __wh.commGF = 0;
+              __wh.windows = 0;
+              __wh.balconies = 0;
+            }
+          }
+          if(!__wh || !__wh.customPolyLocal) return;
+          // Compute bbox of the polygon in local feet
+          var __minX = Infinity, __maxX = -Infinity, __minZ = Infinity, __maxZ = -Infinity;
+          for(var __k = 0; __k < __wh.customPolyLocal.length; __k++){
+            var __pt = __wh.customPolyLocal[__k];
+            if(__pt[0] < __minX) __minX = __pt[0];
+            if(__pt[0] > __maxX) __maxX = __pt[0];
+            if(__pt[1] < __minZ) __minZ = __pt[1];
+            if(__pt[1] > __maxZ) __maxZ = __pt[1];
+          }
+          var __wcx = (__minX + __maxX) / 2;
+          var __wcz = (__minZ + __maxZ) / 2;
+          var __ww = __maxX - __minX;
+          var __wd = __maxZ - __minZ;
+          P.industrialSurfaces = window._industrialBuildSurfaceZones(__wcx, __wcz, __ww, __wd, __ww >= __wd);
+          console.log('[Industrial] Generated ' + P.industrialSurfaces.length + ' surface zones around drawn polygon (' + Math.round(__ww) + ' x ' + Math.round(__wd) + ' ft bbox)');
+          if(typeof rebuildAll === 'function'){
+            try { rebuildAll(); } catch(__e){}
+          }
+        } catch(__e){ console.warn('[Industrial post-draw] failed:', __e && __e.message); }
+      }, 120);
+    }
+  } catch(__e){}
 }
 
 function smBldgClickHandler(e){
@@ -826,11 +929,15 @@ function smClampTowerInsidePodium(vol, candidateCoords){
     } catch(e) { return false; }
   });
   if(!podium || !podium.customPoly) return candidateCoords;
-  // Use turf.intersect to clip the candidate to the podium polygon
+  // Use turf.intersect to clip the candidate to the podium polygon.
+  // Turf v7 requires a FeatureCollection. The two-arg form returned null
+  // silently in v7 — fall back to it for older turf in case it gets bundled.
   try {
     var candidatePoly = turf.polygon([candidateCoords]);
     var podiumPoly = turf.polygon([podium.customPoly]);
-    var clipped = turf.intersect(candidatePoly, podiumPoly);
+    var clipped = null;
+    try { clipped = turf.intersect(turf.featureCollection([candidatePoly, podiumPoly])); }
+    catch(e7){ try { clipped = turf.intersect(candidatePoly, podiumPoly); } catch(e6){ clipped = null; } }
     if(clipped && clipped.geometry && clipped.geometry.coordinates && clipped.geometry.coordinates[0]){
       return clipped.geometry.coordinates[0];
     }

@@ -91,8 +91,8 @@ function updateAIKeyStatus(justSaved) {
     el.style.color = '#4a8';
     // Don't show key prefix/suffix — even partial keys are a credential leak risk
     el.innerHTML = (justSaved ? '&#10003; Key saved' : '&#10003; Key loaded') +
-      ' &mdash; <span style="font-family:monospace;font-size:10px;color:#8a8">' + key.length + ' chars stored in memory</span>' +
-      ' <a href="#" onclick="testClaudeKey();return false" style="color:#AEBC46;font-size:10px;margin-left:6px">[TEST KEY]</a>';
+      ' &mdash; <span style="font-family:monospace;font-size:13px;color:#8a8">' + key.length + ' chars stored in memory</span>' +
+      ' <a href="#" onclick="testClaudeKey();return false" style="color:#AEBC46;font-size:13px;margin-left:6px">[TEST KEY]</a>';
   } else {
     el.style.color = '#888';
     el.textContent = 'No key saved yet. Get one at console.anthropic.com/settings/keys';
@@ -154,8 +154,8 @@ async function testClaudeKey() {
     } catch (proxyErr) {
       console.error('[AI] Test: both methods failed');
       el.innerHTML = '<span style="color:#c66">&#10007; Cannot reach API — check internet connection</span>' +
-        '<br><span style="color:#888;font-size:9px">Direct: ' + escapeHtml(directErr.message) + '</span>' +
-        '<br><span style="color:#888;font-size:9px">Proxy: ' + escapeHtml(proxyErr.message) + '</span>';
+        '<br><span style="color:#888;font-size:12px">Direct: ' + escapeHtml(directErr.message) + '</span>' +
+        '<br><span style="color:#888;font-size:12px">Proxy: ' + escapeHtml(proxyErr.message) + '</span>';
       return;
     }
   }
@@ -168,7 +168,7 @@ async function testClaudeKey() {
     try { const err = JSON.parse(respText); msg = (err.error && err.error.message) || msg; } catch(e) {}
     // Don't expose any portion of the key in the UI
     el.innerHTML = '<span style="color:#c66">&#10007; HTTP ' + resp.status + ': ' + escapeHtml(msg) + ' (via ' + method + ')</span>' +
-      '<br><span style="color:#888;font-size:9px">Click CLEAR, re-paste key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#AEBC46">console.anthropic.com</a></span>';
+      '<br><span style="color:#888;font-size:12px">Click CLEAR, re-paste key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#AEBC46">console.anthropic.com</a></span>';
   }
 }
 
@@ -1043,7 +1043,7 @@ function renderAIResult(endpoint, data, container) {
     case 'risk-assessment': renderRiskResult(data, container); break;
     case 'comparable-insights': renderCompsResult(data, container); break;
     case 'report-narrative': renderReportResult(data, container); break;
-    default: container.innerHTML = `<pre style="font-size:10px;color:#aaa;overflow:auto">${escapeHtml(JSON.stringify(data,null,2))}</pre>`;
+    default: container.innerHTML = `<pre style="font-size:13px;color:#aaa;overflow:auto">${escapeHtml(JSON.stringify(data,null,2))}</pre>`;
   }
 }
 

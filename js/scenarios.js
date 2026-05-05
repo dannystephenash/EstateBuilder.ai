@@ -181,23 +181,23 @@ function renderScenarioDashboard(){
         <span style="font-size:14px;color:${def.color}">${def.icon}</span>
         <span style="font-size:11px;font-weight:700;color:${def.color};letter-spacing:1.5px">${def.label}</span>
       </div>
-      <div style="font-size:9px;color:#666680;margin-bottom:10px">${def.desc}</div>
+      <div style="font-size:12px;color:#666680;margin-bottom:10px">${def.desc}</div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;font-size:10px">
-        <span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Total Revenue</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(d.totalGrossRev)}</span>
-        <span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Total Cost</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(d.totalCost)}</span>
-        <span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Margin</span><span style="color:${marginColor};text-align:right;font-weight:700">${fmtM(d.margin)}</span>
-        <span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Profit Margin</span><span style="color:${marginColor};text-align:right;font-weight:700">${(d.marginOnCost*100).toFixed(1)}%</span>
-        ${irr!==null?`<span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Levered IRR</span><span style="color:${irr>0.15?'#33FF88':irr>0.08?'#FF9933':'#FF4444'};text-align:right;font-weight:700">${(irr*100).toFixed(1)}%</span>`:''}
-        ${npv!==null?`<span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">NPV @ ${(P.pf.dcf.discountRate*100).toFixed(0)}%</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(npv)}</span>`:''}
-        ${eqMult!==null?`<span style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Equity Multiple</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${eqMult.toFixed(2)}×</span>`:''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;font-size:13px">
+        <span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Total Revenue</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(d.totalGrossRev)}</span>
+        <span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Total Cost</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(d.totalCost)}</span>
+        <span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Margin</span><span style="color:${marginColor};text-align:right;font-weight:700">${fmtM(d.margin)}</span>
+        <span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Profit Margin</span><span style="color:${marginColor};text-align:right;font-weight:700">${(d.marginOnCost*100).toFixed(1)}%</span>
+        ${irr!==null?`<span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Levered IRR</span><span style="color:${irr>0.15?'#33FF88':irr>0.08?'#FF9933':'#FF4444'};text-align:right;font-weight:700">${(irr*100).toFixed(1)}%</span>`:''}
+        ${npv!==null?`<span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">NPV @ ${(P.pf.dcf.discountRate*100).toFixed(0)}%</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${fmtM(npv)}</span>`:''}
+        ${eqMult!==null?`<span style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Equity Multiple</span><span style="color:#CCCCDD;text-align:right;font-weight:600">${eqMult.toFixed(2)}×</span>`:''}
       </div>
     </div>`;
   });
   html+='</div>';
 
   // ── Scenario delta table ──
-  html+='<div style="font-size:10px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">SCENARIO DELTA ANALYSIS</div>';
+  html+='<div style="font-size:13px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">SCENARIO DELTA ANALYSIS</div>';
   const base=scenarios.base.pf;
   const metrics=[
     {label:'Total Revenue',     get:d=>d.totalGrossRev,   fmt:fmtM},
@@ -211,14 +211,14 @@ function renderScenarioDashboard(){
   ];
 
   html+=`<div style="background:#0D0D12;border:1px solid #2A2A35;border-radius:2px;padding:8px;margin-bottom:14px;overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;font-size:10px">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="border-bottom:1px solid #FF993340">
-        <th style="text-align:left;padding:4px 8px;color:#888899;font-weight:600;font-size:9px;letter-spacing:1px">METRIC</th>
-        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.best.color};font-weight:700;font-size:9px;letter-spacing:1px">BEST</th>
-        <th style="text-align:right;padding:4px 8px;color:#666680;font-size:9px">Δ</th>
-        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.base.color};font-weight:700;font-size:9px;letter-spacing:1px">BASE</th>
-        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.stress.color};font-weight:700;font-size:9px;letter-spacing:1px">STRESS</th>
-        <th style="text-align:right;padding:4px 8px;color:#666680;font-size:9px">Δ</th>
+        <th style="text-align:left;padding:4px 8px;color:#888899;font-weight:600;font-size:12px;letter-spacing:1px">METRIC</th>
+        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.best.color};font-weight:700;font-size:12px;letter-spacing:1px">BEST</th>
+        <th style="text-align:right;padding:4px 8px;color:#666680;font-size:12px">Δ</th>
+        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.base.color};font-weight:700;font-size:12px;letter-spacing:1px">BASE</th>
+        <th style="text-align:right;padding:4px 8px;color:${SCENARIO_DEFS.stress.color};font-weight:700;font-size:12px;letter-spacing:1px">STRESS</th>
+        <th style="text-align:right;padding:4px 8px;color:#666680;font-size:12px">Δ</th>
       </tr></thead><tbody>`;
 
   metrics.forEach(m=>{
@@ -237,16 +237,16 @@ function renderScenarioDashboard(){
     html+=`<tr style="border-bottom:1px solid #1E1E24">
       <td style="padding:4px 8px;color:#CCCCDD">${m.label}</td>
       <td style="text-align:right;padding:4px 8px;color:#CCCCDD;font-weight:600">${m.fmt(bv)}</td>
-      <td style="text-align:right;padding:4px 8px;color:${bCol};font-size:9px">${dBest}</td>
+      <td style="text-align:right;padding:4px 8px;color:${bCol};font-size:12px">${dBest}</td>
       <td style="text-align:right;padding:4px 8px;color:#FF9933;font-weight:600">${m.fmt(basev)}</td>
       <td style="text-align:right;padding:4px 8px;color:#CCCCDD;font-weight:600">${m.fmt(sv)}</td>
-      <td style="text-align:right;padding:4px 8px;color:${sCol};font-size:9px">${dStress}</td>
+      <td style="text-align:right;padding:4px 8px;color:${sCol};font-size:12px">${dStress}</td>
     </tr>`;
   });
   html+=`</tbody></table></div>`;
 
   // ── Sensitivity analysis charts (SVG sparklines) ──
-  html+='<div style="font-size:10px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">SENSITIVITY ANALYSIS</div>';
+  html+='<div style="font-size:13px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">SENSITIVITY ANALYSIS</div>';
   html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">';
 
   sensInputs.forEach(si=>{
@@ -314,9 +314,9 @@ function renderScenarioDashboard(){
     svg+=`</svg>`;
 
     html+=`<div style="background:#0D0D12;border:1px solid #2A2A35;border-radius:2px;padding:8px">
-      <div style="font-size:10px;font-weight:700;color:#CCCCDD;margin-bottom:4px;letter-spacing:0.5px">${si.label}</div>
+      <div style="font-size:13px;font-weight:700;color:#CCCCDD;margin-bottom:4px;letter-spacing:0.5px">${si.label}</div>
       ${svg}
-      <div style="font-size:9px;color:#666680;margin-top:4px;display:flex;justify-content:space-between">
+      <div style="font-size:12px;color:#666680;margin-top:4px;display:flex;justify-content:space-between">
         <span>Range: ${((minF-1)*100).toFixed(0)}% to +${((maxF-1)*100).toFixed(0)}%</span>
         <span>Margin: ${(minM*100).toFixed(1)}% → ${(maxM*100).toFixed(1)}%</span>
         ${breakEvenFactor!==null?`<span style="color:#FF4444">Break-even: ${((breakEvenFactor-1)*100).toFixed(0)}%</span>`:''}
@@ -326,7 +326,7 @@ function renderScenarioDashboard(){
   html+='</div>';
 
   // ── Key risk metrics ──
-  html+='<div style="font-size:10px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">RISK METRICS</div>';
+  html+='<div style="font-size:13px;font-weight:700;color:#FF9933;letter-spacing:2px;margin-bottom:8px">RISK METRICS</div>';
   html+='<div style="background:#0D0D12;border:1px solid #2A2A35;border-radius:2px;padding:10px 12px">';
 
   // Calculate spread
@@ -343,26 +343,26 @@ function renderScenarioDashboard(){
   const upside=bestMargin-baseMargin;
   const downsideRatio=upside>0?downside/upside:99;
 
-  html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:10px;margin-bottom:8px">
+  html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:13px;margin-bottom:8px">
     <div style="text-align:center">
-      <div style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Scenario Spread</div>
+      <div style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Scenario Spread</div>
       <div style="color:#CCCCDD;font-weight:700;font-size:14px;letter-spacing:-0.03em">${(spread*100).toFixed(1)}%</div>
-      <div style="color:#50506A;font-size:8px">Best − Stress</div>
+      <div style="color:#50506A;font-size:11px">Best − Stress</div>
     </div>
     <div style="text-align:center">
-      <div style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Prob-Weighted Margin</div>
+      <div style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Prob-Weighted Margin</div>
       <div style="color:${expectedMargin>0.10?'#33FF88':'#FF4444'};font-weight:700;font-size:14px;letter-spacing:-0.03em">${(expectedMargin*100).toFixed(1)}%</div>
-      <div style="color:#50506A;font-size:8px">40/30/30 weighted</div>
+      <div style="color:#50506A;font-size:11px">40/30/30 weighted</div>
     </div>
     <div style="text-align:center">
-      <div style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Downside Ratio</div>
+      <div style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Downside Ratio</div>
       <div style="color:${downsideRatio<1.5?'#33FF88':'#FF4444'};font-weight:700;font-size:14px;letter-spacing:-0.03em">${downsideRatio.toFixed(2)}×</div>
-      <div style="color:#50506A;font-size:8px">${downsideRatio<1?'Upside-skewed':'Downside-skewed'}</div>
+      <div style="color:#50506A;font-size:11px">${downsideRatio<1?'Upside-skewed':'Downside-skewed'}</div>
     </div>
     <div style="text-align:center">
-      <div style="color:#888899;font-size:9px;letter-spacing:0.5px;text-transform:uppercase">Stress Profitable?</div>
+      <div style="color:#888899;font-size:12px;letter-spacing:0.5px;text-transform:uppercase">Stress Profitable?</div>
       <div style="color:${stressMargin>0?'#33FF88':'#FF4444'};font-weight:700;font-size:14px;letter-spacing:-0.03em">${stressMargin>0?'YES':'NO'}</div>
-      <div style="color:#50506A;font-size:8px">${stressMargin>0?'Margin: '+(stressMargin*100).toFixed(1)+'%':'Loss: '+fmtM(scenarios.stress.pf.margin)}</div>
+      <div style="color:#50506A;font-size:11px">${stressMargin>0?'Margin: '+(stressMargin*100).toFixed(1)+'%':'Loss: '+fmtM(scenarios.stress.pf.margin)}</div>
     </div>
   </div>`;
 
@@ -383,13 +383,13 @@ function renderScenarioDashboard(){
   }
 
   html+=`<div style="border-top:1px solid #2A2A35;padding-top:8px;margin-top:4px">
-    <span style="font-size:11px;font-weight:700;color:${riskColor};letter-spacing:1.5px">RISK LEVEL: ${riskLevel}</span>
-    <div style="font-size:10px;color:#888899;margin-top:4px;line-height:1.5">${riskText}</div>
+    <span style="font-size:12px;font-weight:700;color:${riskColor};letter-spacing:1.5px">RISK LEVEL: ${riskLevel}</span>
+    <div style="font-size:13px;color:#888899;margin-top:4px;line-height:1.5">${riskText}</div>
   </div>`;
   html+='</div>';
 
   // Footnote
-  html+='<div style="font-size:9px;color:#50506A;margin-top:12px;text-align:center">Scenario adjustments: Best (+10% PSF, -5% costs, -50bps rate, faster timeline) · Stress (-12% PSF, +10% costs, +150bps rate, slower timeline). Sensitivity ranges ±20% of base inputs.</div>';
+  html+='<div style="font-size:12px;color:#50506A;margin-top:12px;text-align:center">Scenario adjustments: Best (+10% PSF, -5% costs, -50bps rate, faster timeline) · Stress (-12% PSF, +10% costs, +150bps rate, slower timeline). Sensitivity ranges ±20% of base inputs.</div>';
 
   el.innerHTML=html;
 }

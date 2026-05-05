@@ -909,6 +909,21 @@ async function exportPDF(){
     [{text:'TOTAL PROJECT COST',color:OLIVE},{text:fmtM(d.totalCost),color:OLIVE}],
   ],y,{colWidths:[120,60]});y+=8;
 
+  // ── 6.2 Pre-Development & Approvals — itemized City of Toronto fees + studies ──
+  if(d.planningFees){
+    checkP(70);
+    var routeLabel = ({spa:'As-of-Right (SPA only)',mv:'Minor Variance',zba:'ZBLA Rezoning',opa_zba:'OPA + ZBLA Rezoning'})[d.approvalRoute] || d.approvalRoute;
+    sectionHead('6.2 Pre-Development & Approvals  -  '+routeLabel);
+    para('City of Toronto 2026 User Fee Schedule (Appendix A, City Planning & Development Review). Project scale: '+d.totalUnits+' units, '+(d.maxStoreys||0)+' storeys, '+Math.round(d.totalGFA).toLocaleString()+' sf GFA, FSI '+(d.fsi||0).toFixed(2)+'x'+(d.asOfRightFSI?' vs as-of-right '+d.asOfRightFSI.toFixed(1)+'x':'')+'. Building permit per Toronto Building Group C rates (BL010/BL011). Approval route may be manually overridden in the proforma when zoning constraints (use, height, density, parking) require an application beyond what FSI alone would suggest. Consultant studies (Phase 1 ESA, geotech, planning rationale, etc.) are captured under Section 1 (Land Acquisition - Due Diligence).', {size:8.5, color:LGREY}); y+=2;
+
+    // Application fees table — itemized City of Toronto fees only
+    var appRows = d.planningFees.applications.map(function(a){
+      return [a.label + (a.section ? '   ['+a.section+']' : ''), fmt$(a.fee)];
+    });
+    appRows.push([{text:'TOTAL PRE-DEVELOPMENT (City Application Fees)', color:OLIVE}, {text:fmt$(d.planningFees.total), color:OLIVE}]);
+    y = addTable(['Application', 'Fee'], appRows, y, {colWidths:[130,50]}); y += 8;
+  }
+
   // ══════ PAGE 9: DCF + RISK ══════
   newPage();pageTitle('7. DCF MODEL & RISK ANALYSIS');
   sectionHead('7.1 Cash Flow Summary ('+d.totalProjectMonths+'-Month Project)');
@@ -1255,7 +1270,7 @@ function renderReport(){
       if(pe.max_height_m != null)h += `<tr><td>Maximum Height</td><td><b>${_esc(pe.max_height_m)} m</b></td></tr>`;
       if(pe.max_storeys != null) h += `<tr><td>Maximum Storeys</td><td><b>${_esc(pe.max_storeys)}</b></td></tr>`;
       h += `</table>`;
-      if(pe.notes) h += `<div class="rpt-p" style="font-size:10px;color:#888">${_esc(pe.notes)}</div>`;
+      if(pe.notes) h += `<div class="rpt-p" style="font-size:13px;color:#888">${_esc(pe.notes)}</div>`;
     }
     if(az.issues && az.issues.length){
       h += `<div class="rpt-h2">Compliance Issues (${az.issues.length})</div>`;
@@ -1264,7 +1279,7 @@ function renderReport(){
         h += `<div class="rpt-p" style="border-left:3px solid ${sevColor};padding-left:10px;margin-bottom:8px">
           <b style="color:${sevColor}">${_esc(iss.parameter || 'Issue')} &mdash; ${_esc((iss.severity||'note').toUpperCase())}</b><br>
           <span style="color:#aaa">Proposed: ${_esc(iss.proposed_value||'N/A')} &middot; Permitted: ${_esc(iss.permitted_value||'N/A')}</span><br>
-          ${iss.bylaw_reference?'<span style="color:#777;font-size:10px">By-law: '+_esc(iss.bylaw_reference)+'</span><br>':''}
+          ${iss.bylaw_reference?'<span style="color:#777;font-size:13px">By-law: '+_esc(iss.bylaw_reference)+'</span><br>':''}
           ${iss.resolution_path?'<span>Resolution: '+_esc(iss.resolution_path)+'</span>':''}
         </div>`;
       });
@@ -1421,7 +1436,7 @@ function renderReport(){
         h += `<div class="rpt-p" style="border-left:3px solid #AEBC46;padding-left:10px;margin-bottom:8px">
           <b style="color:#AEBC46">${_esc(o.strategy)}</b><br>
           <span style="font-size:11px">${_esc(o.rationale)}</span><br>
-          ${o.comparable_gap?'<span style="font-size:10px;color:#888">Gap: '+_esc(o.comparable_gap)+'</span>':''}
+          ${o.comparable_gap?'<span style="font-size:13px;color:#888">Gap: '+_esc(o.comparable_gap)+'</span>':''}
         </div>`;
       });
     }
@@ -1457,7 +1472,7 @@ function renderReport(){
         <button onclick="autoFillComparables()" style="background:#e8c87a;color:#111;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-weight:700;font-size:11px">⚡ Auto-Fill from Database</button>
         <button onclick="addComparable()" style="background:#AEBC46;color:#111;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-weight:700;font-size:11px">+ Add Manually</button>
       </div>
-      <div class="rpt-p" style="font-size:10px;color:#888;margin-bottom:8px">Add comparable developments from Urban Toronto or the City of Toronto portal. These will appear in the PDF report with FSI analysis.</div>
+      <div class="rpt-p" style="font-size:13px;color:#888;margin-bottom:8px">Add comparable developments from Urban Toronto or the City of Toronto portal. These will appear in the PDF report with FSI analysis.</div>
       <table class="rpt-table" style="font-size:11px;table-layout:fixed;width:100%">
         <colgroup><col style="width:25%"><col style="width:18%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:16%"><col style="width:5%"></colgroup>
         <tr><th>Address</th><th>Developer</th><th style="text-align:center">Storeys</th><th style="text-align:center">Units</th><th style="text-align:center">FSI</th><th>Status</th><th></th></tr>
@@ -1517,7 +1532,7 @@ function renderReport(){
           ${P.zoning.exception?'<tr><td>Exception</td><td style="text-align:right"><b style="color:#e8c87a">#'+P.zoning.exceptionNo+'</b> ('+P.zoning.bylawException+')</td></tr>':''}
           ${P.zoning.bylawSection?'<tr><td>By-law Section</td><td style="text-align:right">'+P.zoning.bylawSection+'</td></tr>':''}
         </table>
-        <div class="rpt-p" style="color:#888;font-size:9px">Zoning data auto-detected from City of Toronto ArcGIS REST API (By-law 569-2013). Always verify with the City's interactive zoning map at map.toronto.ca.</div>
+        <div class="rpt-p" style="color:#888;font-size:12px">Zoning data auto-detected from City of Toronto ArcGIS REST API (By-law 569-2013). Always verify with the City's interactive zoning map at map.toronto.ca.</div>
       `:'<div class="rpt-p" style="color:#888">Zoning data not yet loaded. Draw a lot on the Site Map to auto-detect zoning.</div>'}
     </div>
     ${_renderAiZoningHTML()}
@@ -1574,6 +1589,15 @@ function renderReport(){
         <tr><td>Financing</td><td style="text-align:right">${fmtM(d.totalFinancing)}</td></tr>
         <tr style="border-top:2px solid #AEBC46"><td><b>Total Development Cost</b></td><td style="text-align:right"><b>${fmtM(d.totalCost)}</b></td></tr>
       </table>
+      ${d.planningFees ? `
+      <div class="rpt-h2" style="margin-top:14px">Pre-Development &amp; Approvals — ${({spa:'As-of-Right (SPA)',mv:'Minor Variance',zba:'ZBLA Rezoning',opa_zba:'OPA + ZBLA Rezoning'})[d.approvalRoute]||d.approvalRoute}</div>
+      <div class="rpt-p" style="font-size:13px;color:#888">Application fees per official <a href="https://www.toronto.ca/city-government/planning-development/application-forms-fees/fees/" target="_blank" style="color:#AEBC46">City of Toronto 2026 User Fee Schedule</a> (Appendix A · UR/BL codes shown per line). Building permit per Toronto Building Group C Multi-Unit Residential rates (BL010/BL011).${d.asOfRightFSI?' Project FSI '+d.fsi.toFixed(2)+'× vs as-of-right '+d.asOfRightFSI.toFixed(1)+'×.':''} <i>Approval route may be manually overridden when zoning constraints (use, height, density, parking) require an application beyond what FSI alone would suggest. Consultant studies (Phase 1 ESA, geotech, planning rationale, etc.) are captured under Land Acquisition / Due Diligence above.</i></div>
+      <table class="rpt-table" style="table-layout:fixed;font-size:11px">
+        <colgroup><col style="width:55%"><col style="width:25%"><col style="width:20%"></colgroup>
+        <tr><th>Application</th><th>Section</th><th style="text-align:right">Fee</th></tr>
+        ${d.planningFees.applications.map(a=>`<tr><td>${a.label}</td><td style="color:#888">${a.section||''}</td><td style="text-align:right">${fmt$(a.fee)}</td></tr>`).join('')}
+        <tr style="border-top:2px solid #AEBC46"><td><b>Total Pre-Development (City Application Fees)</b></td><td></td><td style="text-align:right"><b style="color:#AEBC46">${fmt$(d.planningFees.total)}</b></td></tr>
+      </table>` : ''}
       <div class="rpt-h2">Returns</div>
       <table class="rpt-table" style="table-layout:fixed">
         <colgroup><col style="width:70%"><col style="width:30%"></colgroup>
@@ -1619,7 +1643,7 @@ function renderReport(){
     // XSS-safe: escape both the error message and the stack trace before injecting as HTML.
     var _safeMsg = String(e && e.message || 'Unknown error').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     var _safeStack = String(e && e.stack || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    el.innerHTML='<div style="color:#ff6644;padding:20px;font-size:12px"><b>Report render error:</b> '+_safeMsg+'<pre style="font-size:9px;color:#888;margin-top:8px">'+_safeStack+'</pre></div>';
+    el.innerHTML='<div style="color:#ff6644;padding:20px;font-size:12px"><b>Report render error:</b> '+_safeMsg+'<pre style="font-size:12px;color:#888;margin-top:8px">'+_safeStack+'</pre></div>';
     console.error('renderReport error:',e);
   }
 }

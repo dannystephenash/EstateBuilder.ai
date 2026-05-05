@@ -1,3 +1,4 @@
+// cache-buster: 20260504k
 // renderer-components.js — Rebuild orchestration, environment, textures, materials, building renderer, lighting, vol panel
 let _rebuildTimer=null;
 let _rebuildRunning=false;
@@ -14,9 +15,34 @@ function _doRebuild(){
   if(_rebuildRunning)return; // prevent re-entrant calls
   _rebuildRunning=true;
   _pfCache=null; // invalidate cached pro-forma data
+  // ── COORDINATE-ORIGIN AUTO-SYNC ──
+  // Before every render, force-sync all polygon data from lat/lng → local feet
+  // using current _gpsOrigin. This guarantees the lot polygon, every volume's
+  // customPolyLocal, and the satellite ground texture share one origin and
+  // can never drift apart between Site Map and Site Plan tabs.
+  try {
+    /* P is `const` in data-model.js, so window.P is undefined. Use bare-name
+       reference (resolves through the shared global lexical environment). */
+    var _doRebuildHasOrigin = false;
+    try { _doRebuildHasOrigin = (typeof P !== 'undefined' && P && P._gpsOrigin); } catch(e){}
+    if(typeof realignBuildingToLot === 'function' && _doRebuildHasOrigin && typeof turf !== 'undefined'){
+      // Suppress the cascading rebuildAll inside realign — we ARE the rebuild.
+      var _origRebuildAll = window.rebuildAll;
+      window.rebuildAll = function(){};
+      realignBuildingToLot();
+      window.rebuildAll = _origRebuildAll;
+    }
+    if(typeof normalizeLotPolygon === 'function') normalizeLotPolygon();
+    // Re-anchor any volume tagged with _relativeToLot (multi-tower podium +
+    // towers) to the current lot polygon — guarantees they always render
+    // inside the lot regardless of coordinate-system shifts.
+    if(typeof window.recomputeRelativeVolumes === 'function') window.recomputeRelativeVolumes();
+  } catch(e){ console.warn('[doRebuild] auto-realign failed:', e); }
   try{ rebuildEnvironment(); }catch(e){ console.error('rebuildEnvironment error:',e); }
+  try{ rebuildContextBuildings(); }catch(e){ console.error('rebuildContextBuildings error:',e); }
   try{ rebuildLot(); }catch(e){ console.error('rebuildLot error:',e); }
   try{ rebuildSetbacks(); }catch(e){ console.error('rebuildSetbacks error:',e); }
+  try{ rebuildIndustrialSurfaces(); }catch(e){ console.error('rebuildIndustrialSurfaces error:',e); }
   try{ rebuildBuilding(); }catch(e){ console.error('rebuildBuilding error:',e); }
   try{ if(typeof _phRebuild === 'function') _phRebuild(); }catch(e){ console.error('_phRebuild error:',e); }
   try{ rebuildLabels(); }catch(e){ console.error('rebuildLabels error:',e); }
@@ -56,16 +82,117 @@ function rebuildEnvironment(){
   const cx=f2m((lotMinX+lotMaxX)/2);
   const cz=f2m((lotMinZ+lotMaxZ)/2);
 
-  // Ground plane — centered on lot
-  const groundSize=Math.max(300, f2m(Math.max(lotMaxX-lotMinX, lotMaxZ-lotMinZ))*3);
-  const ground=new THREE.Mesh(
-    new THREE.PlaneGeometry(groundSize,groundSize),
-    new THREE.MeshStandardMaterial({color:0x383530,roughness:0.92})
-  );
+  // Ground plane — centered on lot, with satellite imagery if GPS origin available.
+  // Expanded coverage: minimum 900 m (≈3 city blocks) and 6× the lot's longest
+  // dimension. Mapbox Static Images @2x gives 2560×2560 px regardless of bbox,
+  // so wider ground = lower resolution per metre. At 900 m this is ~0.35 m/px
+  // — still sharp enough to read individual buildings and street geometry while
+  // showing roughly 9× the surrounding context vs. the previous 300 m default.
+  // Detail-zone ground (carries the Mapbox satellite tile when available)
+  // Bumped minimum 900 → 2400 m so the satellite plane covers more of the
+  // visible viewport at the new 800 m max camera zoom-out. Resolution trade-off
+  // at 2400 m: ~0.94 m/px from the 2560-px satellite image — still readable.
+  const groundSize=Math.max(2400, f2m(Math.max(lotMaxX-lotMinX, lotMaxZ-lotMinZ))*6);
+  const groundMat=new THREE.MeshStandardMaterial({color:0x383530,roughness:0.92});
+  const ground=new THREE.Mesh(new THREE.PlaneGeometry(groundSize,groundSize), groundMat);
   ground.rotation.x=-Math.PI/2;
   ground.position.set(cx,-0.05,cz);
   ground.receiveShadow=true;
   g.add(ground);
+
+  // Fallback far-field underlay — solid matte ground that extends to ±4000 m
+  // so the camera never sees void/sky at the horizon. Sits 5 cm below the
+  // satellite plane so it's only visible BEYOND the satellite extent.
+  // Cheap (single quad), no texture, no shadows — purely visual horizon fill.
+  const farGroundMat = new THREE.MeshBasicMaterial({color:0x2a2a2a});
+  const farGround = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000), farGroundMat);
+  farGround.rotation.x = -Math.PI / 2;
+  farGround.position.set(cx, -0.10, cz);
+  farGround.receiveShadow = false;
+  g.add(farGround);
+
+  // ── SATELLITE IMAGERY TEXTURE ──
+  // Fetches a Mapbox satellite tile for the ground plane area via Static Images API.
+  // Caches the raw HTMLImageElement so it survives clearGroup disposal.
+  var _satToken = (typeof mapboxgl !== 'undefined' && mapboxgl.accessToken)
+    ? mapboxgl.accessToken
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('oleadev_mapbox_token') : null);
+
+  if(!P._gpsOrigin){ console.log('[SAT] Skipped — no GPS origin (draw lot on Site Map first)'); }
+  else if(!_satToken){ console.log('[SAT] Skipped — no Mapbox token (open Site Map tab first)'); }
+
+  if(P._gpsOrigin && _satToken){
+    try {
+      var originLng = P._gpsOrigin.lng, originLat = P._gpsOrigin.lat;
+      var halfG = groundSize / 2;
+
+      // Convert ground plane edges from meters to feet, then to degree offsets
+      // Coordinate system: X+ = East, Z+ = South, origin = P._gpsOrigin
+      var westM = cx - halfG, eastM = cx + halfG;
+      var northM = cz - halfG, southM = cz + halfG;
+
+      var mPerDegLat = 111132;
+      var mPerDegLng = 111132 * Math.cos(originLat * Math.PI / 180);
+
+      var bboxWest = originLng + westM / mPerDegLng;
+      var bboxEast = originLng + eastM / mPerDegLng;
+      // Z+ = South, so larger Z = further south = lower latitude
+      var bboxNorth = originLat - northM / mPerDegLat;
+      var bboxSouth = originLat - southM / mPerDegLat;
+
+      // Ensure south < north for bbox format [west,south,east,north]
+      if(bboxSouth > bboxNorth){ var _tmp=bboxSouth; bboxSouth=bboxNorth; bboxNorth=_tmp; }
+
+      var satUrl = 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/'
+        + '[' + bboxWest.toFixed(6) + ',' + bboxSouth.toFixed(6) + ','
+        + bboxEast.toFixed(6) + ',' + bboxNorth.toFixed(6) + ']'
+        + '/1280x1280@2x?access_token=' + _satToken;
+
+      console.log('[SAT] Fetching satellite imagery:', bboxWest.toFixed(5), bboxSouth.toFixed(5), bboxEast.toFixed(5), bboxNorth.toFixed(5));
+
+      var _satKey = [bboxWest,bboxSouth,bboxEast,bboxNorth].map(function(v){return v.toFixed(5);}).join(',');
+
+      // Helper: create a fresh texture from an image and apply to ground
+      function _applySatToGround(img, targetMesh){
+        var tex = new THREE.CanvasTexture(img);
+        tex.encoding = THREE.sRGBEncoding;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        targetMesh.material.dispose();
+        targetMesh.material = new THREE.MeshStandardMaterial({map:tex, roughness:0.95, metalness:0.0});
+        targetMesh.receiveShadow = true;
+        console.log('[SAT] Satellite texture applied to ground plane');
+      }
+
+      if(window._satImgCache && window._satImgCache.key === _satKey && window._satImgCache.img){
+        _applySatToGround(window._satImgCache.img, ground);
+      } else {
+        var _fetchId = (window._satFetchId = (window._satFetchId || 0) + 1);
+        var satImg = new Image();
+        satImg.crossOrigin = 'anonymous';
+        satImg.onload = function(){
+          if(_fetchId !== window._satFetchId) return;
+          window._satImgCache = {key: _satKey, img: satImg};
+          console.log('[SAT] Image loaded ('+satImg.naturalWidth+'x'+satImg.naturalHeight+'), applying texture...');
+          // Find the current ground mesh in env group (may have been rebuilt)
+          var envG = groups.env;
+          if(!envG){ console.warn('[SAT] No env group found'); return; }
+          var found = false;
+          for(var ci=0; ci<envG.children.length; ci++){
+            var ch = envG.children[ci];
+            if(ch.isMesh && ch.geometry && ch.position.y < 0){
+              _applySatToGround(satImg, ch);
+              found = true;
+              break;
+            }
+          }
+          if(!found) console.warn('[SAT] Ground mesh not found in env group');
+        };
+        satImg.onerror = function(e){ console.error('[SAT] Image load FAILED. URL:', satUrl.substring(0,120)+'...'); };
+        satImg.src = satUrl;
+      }
+    } catch(e){ console.error('[SAT] Error:', e); }
+  }
 
   // ── ROADS (dynamic array, togglable) ──
   if(P._showRoads===false){/* skip roads */} else {
@@ -160,6 +287,183 @@ function addTree(g,x,z){
   g.add(canopy);
 }
 
+/**
+ * Renders neighbouring building footprints (cached in P._contextBuildingFeatures)
+ * as muted extruded blocks in the Three.js massing view.
+ * Features are captured at lot-draw time by smCaptureContextBuildings() in sitemap-lot.js,
+ * when Mapbox tiles are guaranteed to be loaded.
+ */
+/* Module-level cache of context buildings: footprint polygon (in local feet,
+   project convention X+=East / Z+=South) PLUS the neighbour's height in
+   metres. Populated by rebuildContextBuildings() and consumed by
+   _isEdgeAbuttedByContext() to decide which user-building edges should hide
+   their windows / storefront glass per FLOOR, taking neighbour height into
+   account (so a 14-storey building next to a 3-storey neighbour only loses
+   windows on the bottom 3 floors). */
+var _ctxBuildingPolysFt = [];   /* array of { poly: [[x,z],...], heightM: number } */
+
+/* Point-in-polygon test (ray casting) — returns true if (px, pz) is inside
+   the polygon. Polygon is array of [x, z] pairs (closing vertex optional). */
+function _pointInPolyXZ(px, pz, poly){
+  var inside = false;
+  for(var i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    var xi = poly[i][0], zi = poly[i][1];
+    var xj = poly[j][0], zj = poly[j][1];
+    if(((zi > pz) !== (zj > pz)) && (px < (xj - xi) * (pz - zi) / (zj - zi) + xi)){
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/* Per-EDGE abutment check (5-sample majority). Used for the GF storefront
+   suppression — there's only one storefront per face, so a coarse check is OK.
+   For windows / balconies that need PER-WINDOW or PER-BALCONY granularity,
+   use _isPointAbuttedByContext() instead. */
+function _isEdgeAbuttedByContext(p0, p1, nx, nz, floorMidYM, walkOutFt){
+  if(!Array.isArray(_ctxBuildingPolysFt) || _ctxBuildingPolysFt.length === 0) return false;
+  var W = walkOutFt || 4;
+  var samples = 5;
+  var hits = 0;
+  var minNeighbourH = (typeof floorMidYM === 'number') ? Math.max(0.5, floorMidYM) : 0.5;
+  for(var s = 1; s <= samples; s++){
+    var t = s / (samples + 1);
+    var midX = p0[0] + (p1[0] - p0[0]) * t;
+    var midZ = p0[1] + (p1[1] - p0[1]) * t;
+    var probeX = midX + nx * W;
+    var probeZ = midZ + nz * W;
+    for(var ci = 0; ci < _ctxBuildingPolysFt.length; ci++){
+      var ctx = _ctxBuildingPolysFt[ci];
+      if(_pointInPolyXZ(probeX, probeZ, ctx.poly) && ctx.heightM >= minNeighbourH){
+        hits++;
+        break;
+      }
+    }
+  }
+  return hits >= Math.ceil(samples / 2);
+}
+
+/* Per-POINT abutment check — used for individual windows and balconies so each
+   element gets its own decision (instead of a majority-rules vote across an
+   entire edge). Probes a single point `walkOutFt` outward from (xFt, zFt) in
+   the (nx, nz) direction; returns true if the probe lands inside a context
+   building whose roof reaches at or above floorMidYM (in metres, world Y). */
+function _isPointAbuttedByContext(xFt, zFt, nx, nz, floorMidYM, walkOutFt){
+  if(!Array.isArray(_ctxBuildingPolysFt) || _ctxBuildingPolysFt.length === 0) return false;
+  var W = walkOutFt || 8;
+  var probeX = xFt + nx * W;
+  var probeZ = zFt + nz * W;
+  var minNeighbourH = (typeof floorMidYM === 'number') ? Math.max(0.5, floorMidYM) : 0.5;
+  for(var ci = 0; ci < _ctxBuildingPolysFt.length; ci++){
+    var ctx = _ctxBuildingPolysFt[ci];
+    if(_pointInPolyXZ(probeX, probeZ, ctx.poly) && ctx.heightM >= minNeighbourH){
+      return true;
+    }
+  }
+  return false;
+}
+
+function rebuildContextBuildings(){
+  clearGroup('context');
+  var g = groups.context;
+  /* Reset the polygon cache — re-populated below as we iterate features. */
+  _ctxBuildingPolysFt = [];
+
+  // Need cached features and GPS origin
+  if(!P._contextBuildingFeatures || P._contextBuildingFeatures.length === 0) return;
+  if(!P._gpsOrigin) return;
+  if(typeof turf === 'undefined') return;
+
+  var originLng = P._gpsOrigin.lng;
+  var originLat = P._gpsOrigin.lat;
+
+  // Compute lot bounding box in feet for proximity filtering
+  var lotV = lotVerts();
+  var lotXs = lotV.map(function(v){return v[0];}), lotZs = lotV.map(function(v){return v[1];});
+  var lotCx = (Math.min.apply(null,lotXs) + Math.max.apply(null,lotXs)) / 2;
+  var lotCz = (Math.min.apply(null,lotZs) + Math.max.apply(null,lotZs)) / 2;
+  var maxRadius = 3500; // feet (≈1067 m) — bumped from 1500 to render context buildings beyond 1 km
+
+  // Shared material for context buildings — slightly warm grey, substantial
+  // opacity so they read as solid context masses while still looking subordinate
+  // to the user's main design.  side:DoubleSide is required because we negate
+  // shape-Y below to fix the N/S mirroring bug — that flip reverses polygon
+  // winding, so without DoubleSide the side faces of each building would be
+  // back-face culled and only the rooftop would render.
+  var ctxMat = new THREE.MeshStandardMaterial({
+    color: 0xa8a8a8,
+    roughness: 0.85,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.75,
+    side: THREE.DoubleSide
+  });
+
+  P._contextBuildingFeatures.forEach(function(bldg){
+    var outerRing = bldg.coords;
+    if(!outerRing || outerRing.length < 4) return;
+
+    var heightM = bldg.height;
+    var minHeightM = bldg.minHeight || 0;
+    var heightFt = heightM * 3.28084;
+    var minHeightFt = minHeightM * 3.28084;
+    var extrudeH = heightFt - minHeightFt;
+    if(extrudeH <= 0) return;
+
+    // Convert GPS coordinates to local feet (project convention: X+ = East, Z+ = South).
+    //
+    // KEY FIX: shape's Y is set to -zFt (north-positive), not +zFt (south-positive).
+    // This is because the mesh is rotated by `mesh.rotation.x = -π/2` below, which
+    // maps shape's +Y axis to world's -Z. With the previous +zFt, a building south
+    // of origin (zFt > 0) ended up at world -Z (north of origin) — mirrored across
+    // the E-W axis. Negating zFt here puts it back where it belongs.
+    var shapePts = [];
+    var polyFt = [];        /* xFt, zFt pairs for the abutment-check cache */
+    var centroidX = 0, centroidZ = 0;
+    for(var i = 0; i < outerRing.length - 1; i++){ // skip closing duplicate vertex
+      var lng = outerRing[i][0], lat = outerRing[i][1];
+      var xM = turf.distance(turf.point([originLng, originLat]), turf.point([lng, originLat]), {units:'meters'});
+      var xFt = xM * 3.28084 * (lng > originLng ? 1 : -1);
+      var zM = turf.distance(turf.point([originLng, originLat]), turf.point([originLng, lat]), {units:'meters'});
+      var zFt = zM * 3.28084 * (lat < originLat ? 1 : -1);
+      shapePts.push(new THREE.Vector2(f2m(xFt), -f2m(zFt)));  /* note negated Y */
+      polyFt.push([xFt, zFt]);
+      centroidX += xFt;
+      centroidZ += zFt;
+    }
+    if(shapePts.length < 3) return;
+    centroidX /= shapePts.length;
+    centroidZ /= shapePts.length;
+
+    // Proximity filter: skip buildings too far from lot centre
+    var dx = centroidX - lotCx, dz = centroidZ - lotCz;
+    if(Math.sqrt(dx*dx + dz*dz) > maxRadius) return;
+
+    /* Push this building's polygon (in local feet) AND its height (metres)
+       into the cache so the user-building renderer can detect per-floor
+       abutment — a neighbour only blocks windows on floors at or below its
+       roof height. */
+    _ctxBuildingPolysFt.push({ poly: polyFt, heightM: heightM || 0 });
+
+    // Create extruded geometry
+    try {
+      var shape = new THREE.Shape(shapePts);
+      var extGeo = new THREE.ExtrudeGeometry(shape, {
+        depth: f2m(extrudeH),
+        bevelEnabled: false
+      });
+      // ExtrudeGeometry extrudes along Z — rotate so it goes up (Y)
+      var mesh = new THREE.Mesh(extGeo, ctxMat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = f2m(minHeightFt);
+      mesh.receiveShadow = true;
+      g.add(mesh);
+    } catch(e){
+      // Skip malformed geometries silently
+    }
+  });
+}
+
 function rebuildLot(){
   clearGroup('lot');
   const g=groups.lot;
@@ -186,23 +490,125 @@ function rebuildLot(){
     }
   }
 
-  // Lot outline
-  const pts=vts.map(v=>new THREE.Vector3(f2m(v[0]),0.05,f2m(v[1])));
-  pts.push(pts[0].clone());
-  const lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
-  const line=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:'#AEBC46',linewidth:2}));
-  g.add(line);
+  // Lot outline — ALWAYS render so the user can visually verify the property
+  // boundary against the satellite imagery, especially when the building
+  // extends past the lot (large massing on a small parcel). When buildings
+  // exist we draw it in a brighter "alert" colour at a slightly raised Y so
+  // it's visible above the satellite ground and reads as a "property line".
+  {
+    const hasVols = P.vols && P.vols.length > 0;
+    const outlineColor = hasVols ? '#ff3300' : '#AEBC46';
+    /* CRITICAL: outline MUST be at the SAME Y as the building footprint
+       (essentially ground level) so it visually aligns with the building edge
+       in 3D perspective. Drawing it above (Y=1m) causes parallax — the line
+       appears offset from the building when viewed at a tilt, even though
+       the X/Z coords match exactly. depthTest:false + high renderOrder lets
+       it draw THROUGH the building so it's always visible. */
+    const outlineY = 0.05;
+    const pts=vts.map(v=>new THREE.Vector3(f2m(v[0]),outlineY,f2m(v[1])));
+    pts.push(pts[0].clone());
+    const lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
+    const lineMat=new THREE.LineBasicMaterial({color:outlineColor,linewidth:3,toneMapped:false,depthTest:false,transparent:true,opacity:0.95});
+    const line=new THREE.Line(lineGeo,lineMat);
+    line.renderOrder = 999;
+    g.add(line);
 
-  // Lot fill (transparent)
-  const shape=new THREE.Shape();
-  shape.moveTo(f2m(vts[0][0]),f2m(vts[0][1]));
-  for(let i=1;i<vts.length;i++) shape.lineTo(f2m(vts[i][0]),f2m(vts[i][1]));
-  shape.closePath();
-  const fillGeo=new THREE.ShapeGeometry(shape);
-  const fill=new THREE.Mesh(fillGeo,new THREE.MeshBasicMaterial({color:'#AEBC46',transparent:true,opacity:0.08}));
-  fill.rotation.x=-Math.PI/2;
-  fill.position.y=0.03;
-  g.add(fill);
+    /* Console diagnostic — helps you compare the lot's actual size against
+       what each building volume is set to. If a volume's width/depth is much
+       larger than the lot, the building will extend past the property line.
+       Also flags volumes whose customPolyLocal is OFFSET from the current lot
+       polygon (typical cause of "building doesn't sit on the parcel"). */
+    if(hasVols){
+      var lbDiag = lotBounds();
+      var lotW = Math.round(lbDiag.width), lotD = Math.round(lbDiag.depth);
+      var lotArea = 0;
+      /* Shoelace formula for area in sq ft. */
+      for(var pi=0; pi<vts.length; pi++){
+        var pj = (pi + 1) % vts.length;
+        lotArea += (vts[pi][0] * vts[pj][1] - vts[pj][0] * vts[pi][1]);
+      }
+      lotArea = Math.abs(lotArea / 2);
+      /* Lot vertex count for shape-match comparison (excluding the closing
+         duplicate vertex). */
+      var lotVtxCount = vts.length;
+      if(lotVtxCount > 1 && vts[0][0] === vts[lotVtxCount-1][0] && vts[0][1] === vts[lotVtxCount-1][1]) lotVtxCount--;
+
+      /* Lot area for comparison against volume polygon area. */
+      var volSummary = P.vols.map(function(v){
+        var hasPoly = Array.isArray(v.customPolyLocal) && v.customPolyLocal.length >= 3;
+        if(!hasPoly){
+          return v.name + ': ' + (v.width||0) + "'x" + (v.depth||0) + "' [RECT - does NOT match lot polygon - click Match Lot]";
+        }
+        /* Check both bbox and SHAPE: a 4-vertex rectangle filling the lot's
+           bbox would score "matched" on bbox alone but render as a rectangle,
+           overshooting any concave notches in an L/stepped lot. */
+        var vXs = v.customPolyLocal.map(function(p){return p[0];});
+        var vZs = v.customPolyLocal.map(function(p){return p[1];});
+        var vMinX = Math.min.apply(null, vXs), vMinZ = Math.min.apply(null, vZs);
+        var vMaxX = Math.max.apply(null, vXs), vMaxZ = Math.max.apply(null, vZs);
+        var dx = vMinX - lbDiag.minX, dz = vMinZ - lbDiag.minZ;
+        if(Math.abs(dx) > 2 || Math.abs(dz) > 2){
+          return v.name + ': [POLYGON OFFSET by dx=' + Math.round(dx) + "', dz=" + Math.round(dz) + "' - click Match Lot]";
+        }
+        /* Vertex count comparison — if lot has 6 verts but volume has 4,
+           the volume is a rectangle approximation, not the real shape. */
+        var volVtxCount = v.customPolyLocal.length;
+        if(volVtxCount > 1 && v.customPolyLocal[0][0] === v.customPolyLocal[volVtxCount-1][0] &&
+           v.customPolyLocal[0][1] === v.customPolyLocal[volVtxCount-1][1]) volVtxCount--;
+        /* Polygon area via shoelace. */
+        var volArea = 0;
+        for(var vai=0; vai<volVtxCount; vai++){
+          var vaj = (vai+1) % volVtxCount;
+          volArea += (v.customPolyLocal[vai][0]*v.customPolyLocal[vaj][1] - v.customPolyLocal[vaj][0]*v.customPolyLocal[vai][1]);
+        }
+        volArea = Math.abs(volArea/2);
+        var areaDelta = volArea - lotArea;
+        var shapeOK = (volVtxCount === lotVtxCount) && Math.abs(areaDelta) < (lotArea * 0.02); /* within 2% */
+        if(!shapeOK){
+          return v.name + ': [SHAPE MISMATCH — volume has ' + volVtxCount + ' verts ('+Math.round(volArea).toLocaleString()+' sf) vs lot ' + lotVtxCount + ' verts ('+Math.round(lotArea).toLocaleString()+' sf) - click Match Lot]';
+        }
+        return v.name + ': [POLYGON-MATCHED] ' + volVtxCount + ' verts, ' + Math.round(volArea).toLocaleString() + ' sf';
+      }).join('  |  ');
+      console.log('[Lot] bounds: ' + lotW + ' x ' + lotD + ' ft (' + Math.round(lotArea).toLocaleString() + ' sq ft, ' + lotVtxCount + ' vertices)');
+      console.log('[Volumes] ' + volSummary);
+
+      /* Print actual vertices of both polygons side-by-side so we can detect
+         a per-vertex discrepancy that summary stats don't catch (e.g. polygons
+         with identical bbox/area but mirror-image shapes, vertex-rotation, or
+         a single vertex shifted). */
+      console.log('[Lot] vertices (xFt, zFt):');
+      vts.forEach(function(v, i){
+        if(i < lotVtxCount) console.log('  '+i+': ['+Math.round(v[0])+', '+Math.round(v[1])+']');
+      });
+      P.vols.forEach(function(v){
+        if(!Array.isArray(v.customPolyLocal) || v.customPolyLocal.length < 3) return;
+        var vCount = v.customPolyLocal.length;
+        if(vCount > 1 && v.customPolyLocal[0][0] === v.customPolyLocal[vCount-1][0] &&
+           v.customPolyLocal[0][1] === v.customPolyLocal[vCount-1][1]) vCount--;
+        console.log('[Volume '+v.name+'] customPolyLocal vertices (xFt, zFt):');
+        for(var pvi = 0; pvi < vCount; pvi++){
+          console.log('  '+pvi+': ['+Math.round(v.customPolyLocal[pvi][0])+', '+Math.round(v.customPolyLocal[pvi][1])+']');
+        }
+      });
+    }
+    /* Skip the transparent fill / corner labels when buildings are present —
+       the simple outline is enough to read the property boundary. */
+    if(hasVols){
+      /* Done — outline only. */
+    } else {
+
+    // Lot fill (transparent)
+    const shape=new THREE.Shape();
+    shape.moveTo(f2m(vts[0][0]),f2m(vts[0][1]));
+    for(let i=1;i<vts.length;i++) shape.lineTo(f2m(vts[i][0]),f2m(vts[i][1]));
+    shape.closePath();
+    const fillGeo=new THREE.ShapeGeometry(shape);
+    const fill=new THREE.Mesh(fillGeo,new THREE.MeshBasicMaterial({color:'#AEBC46',transparent:true,opacity:0.08}));
+    fill.rotation.x=-Math.PI/2;
+    fill.position.y=0.03;
+    g.add(fill);
+    }   /* end else (no buildings) */
+  }   /* end lot-outline block */
 
   // Dimension labels on lot edges
   for(let i=0;i<vts.length;i++){
@@ -333,28 +739,51 @@ function makeBrickTex(w,h){
   const cv=document.createElement('canvas');cv.width=w;cv.height=h;
   const ctx=cv.getContext('2d');
   const brickW=24,brickH=10,mortarW=2;
-  const baseColors=['#8b5e4b','#9a6e5a','#7a5040','#8d6550','#7b5545'];
-  // Mortar base
-  ctx.fillStyle='#aaa095';ctx.fillRect(0,0,w,h);
+  // Realistic red/orange/brown brick palette — heritage Toronto brick tones
+  const baseColors=[
+    '#8B3A2A',  // deep red brick
+    '#A0442E',  // classic red
+    '#934030',  // burnt sienna
+    '#7C3320',  // dark red-brown
+    '#B05234',  // warm orange-red
+    '#6E2E1E',  // dark brown brick
+    '#9C4A32',  // medium red
+    '#854535',  // red-brown
+  ];
+  // Mortar — light grey cement
+  ctx.fillStyle='#b5afa5';ctx.fillRect(0,0,w,h);
   for(let y=0;y<h;y+=brickH+mortarW){
     const offset=(Math.floor(y/(brickH+mortarW))%2)*(brickW/2);
     for(let x=-brickW;x<w+brickW;x+=brickW+mortarW){
-      // Per-brick color variation
+      // Per-brick color variation for realistic look
       const bc=baseColors[Math.floor(Math.random()*baseColors.length)];
       let br=parseInt(bc.slice(1,3),16),bg=parseInt(bc.slice(3,5),16),bb=parseInt(bc.slice(5,7),16);
-      const hueShift=Math.floor(Math.random()*10)-5;
-      const lightShift=Math.floor(Math.random()*16)-8;
+      // Slight hue/brightness shifts per brick
+      const hueShift=Math.floor(Math.random()*14)-7;
+      const lightShift=Math.floor(Math.random()*18)-9;
       br=Math.max(0,Math.min(255,br+hueShift+lightShift));
-      bg=Math.max(0,Math.min(255,bg+hueShift*0.5+lightShift));
-      bb=Math.max(0,Math.min(255,bb+lightShift));
-      // Occasional aged/dark brick (5% chance)
-      if(Math.random()<0.05){br=Math.floor(br*0.6);bg=Math.floor(bg*0.6);bb=Math.floor(bb*0.6);}
+      bg=Math.max(0,Math.min(255,bg+Math.floor(hueShift*0.4)+lightShift));
+      bb=Math.max(0,Math.min(255,bb+Math.floor(hueShift*0.2)+lightShift));
+      // Occasional dark/aged brick (8% chance)
+      if(Math.random()<0.08){br=Math.floor(br*0.55);bg=Math.floor(bg*0.55);bb=Math.floor(bb*0.55);}
+      // Occasional lighter/weathered brick (5%)
+      else if(Math.random()<0.05){br=Math.min(255,br+25);bg=Math.min(255,bg+18);bb=Math.min(255,bb+12);}
       ctx.fillStyle='rgb('+br+','+bg+','+bb+')';
       ctx.fillRect(x+offset,y,brickW,brickH);
-      // Mortar joint shadow at bottom of brick (darker line)
-      ctx.fillStyle='rgba(0,0,0,0.15)';
+      // Subtle surface variation within each brick (horizontal streaks)
+      for(let s=0;s<2;s++){
+        var sy=y+2+Math.floor(Math.random()*(brickH-4));
+        ctx.fillStyle='rgba(0,0,0,'+(0.03+Math.random()*0.06)+')';
+        ctx.fillRect(x+offset+1,sy,brickW-2,1);
+      }
+      // Mortar joint shadow at bottom of brick
+      ctx.fillStyle='rgba(0,0,0,0.18)';
       ctx.fillRect(x+offset,y+brickH-1,brickW,1);
+      // Mortar joint highlight at top (light catching mortar edge)
+      ctx.fillStyle='rgba(255,255,255,0.06)';
+      ctx.fillRect(x+offset,y,brickW,1);
       // Mortar joint shadow at right of brick
+      ctx.fillStyle='rgba(0,0,0,0.12)';
       ctx.fillRect(x+offset+brickW-1,y,1,brickH);
     }
   }
@@ -362,7 +791,7 @@ function makeBrickTex(w,h){
   const imgData=ctx.getImageData(0,0,w,h);
   const d=imgData.data;
   for(let i=0;i<d.length;i+=4){
-    const n=Math.floor(Math.random()*10)-5;
+    const n=Math.floor(Math.random()*8)-4;
     d[i]=Math.max(0,Math.min(255,d[i]+n));
     d[i+1]=Math.max(0,Math.min(255,d[i+1]+n));
     d[i+2]=Math.max(0,Math.min(255,d[i+2]+n));
@@ -502,9 +931,9 @@ function makeGreenRoofTex(w,h){
 
 // ═══ MATERIAL LIBRARY (module level, reused across rebuilds) ═══
 var MAT = {
-  // Brick — warm brown heritage brick
-  brick: new THREE.MeshStandardMaterial({color:0x8b5e4b, roughness:0.92, metalness:0.01}),
-  brickDark: new THREE.MeshStandardMaterial({color:0x5a3d30, roughness:0.95, metalness:0.01}),
+  // Brick — red-brown heritage brick
+  brick: new THREE.MeshStandardMaterial({color:0x8B3A2A, roughness:0.92, metalness:0.01}),
+  brickDark: new THREE.MeshStandardMaterial({color:0x5C2418, roughness:0.95, metalness:0.01}),
   // Concrete — darkened to survive ACES + golden hour without blowing out
   concreteSmooth: new THREE.MeshStandardMaterial({color:0x706860, roughness:0.65, metalness:0.03}),
   concreteDark: new THREE.MeshStandardMaterial({color:0x3a3834, roughness:0.78, metalness:0.04}),
@@ -601,6 +1030,30 @@ function addCurtainWall(parent, ox, oy, oz, w, floors, fh, rotY, opts){
   var glassMat = o.glass || MAT.glass;
   var mullionMat = o.mullion || MAT.mullion;
   var concMat = o.concrete || MAT.concreteDark;
+  // ── backDepthM option ──
+  // How deep behind the glass the interior back wall + partition walls + floor
+  // slabs are positioned. Default 3.2m simulates real apartment depth so the
+  // warm interior is visible through the glass at night (and through the day's
+  // tinted glass too).
+  //
+  // For edges adjacent to a CONCAVE polygon vertex, the renderer overrides this
+  // to a shallow value (e.g. 0.6m) so the back wall can't poke through the
+  // OPPOSITE facade and appear as a visible white wall outside the building.
+  // The night-time interior glow still works — the back wall is just placed
+  // immediately behind the glass instead of 3.2m back.
+  //
+  // (Earlier fix used a binary noBackWall:true skip that left those facades
+  // dark at night — backDepthM keeps the glow while killing the artifact.)
+  // backDepthM:0 → no back wall at all (concave-adjacent edges).
+  // backDepthM:undefined/null → default 3.2m (standard apartment depth).
+  // backDepthM:>0 → explicit shallow depth.
+  var intDepth;
+  if(typeof o.backDepthM === 'number'){
+    intDepth = Math.max(0, o.backDepthM);
+  } else {
+    intDepth = 3.2;
+  }
+  var skipBackWall = intDepth < 0.01;
   var gr = new THREE.Group();
   var bayW = o.bayWidth || 3.0;
   var nBays = Math.max(1, Math.round(w / bayW));
@@ -612,37 +1065,46 @@ function addCurtainWall(parent, ox, oy, oz, w, floors, fh, rotY, opts){
   var seed = Math.abs(Math.round((ox + oz * 7.13) * 1000)) % 9999;
   // Group bays into "units" of 2 bays each so contiguous windows share lit state
   var unitWidthBays = 2;
-  // Interior depth — how far behind the glass the back wall sits (real apartment depth ~3-4m)
-  var intDepth = 3.2;
+  // Partition + floor-slab depth derived from intDepth — must always be slightly
+  // less so the slab doesn't visually clip with adjacent geometry.
+  var slabDepth = Math.max(0.2, intDepth - 0.05);
   for(var f = 0; f < floors; f++){
     var fy = f * fh;
     var spMat = (f % 2 === 0) ? concMat : MAT.spandrel;
     // ── INTERIOR BACK WALL (per floor) — visible through glass, gives apartment depth ──
-    // One opaque plane spanning the full facade width, positioned ~1.4m inside the glass.
-    // Shows as warm-cream surface through transparent curtain wall — looks like room interiors.
-    var backWall = new THREE.Mesh(
-      new THREE.PlaneGeometry(w - 0.05, visionH - 0.04),
-      MAT.unitInterior
-    );
-    backWall.position.set(0, fy + spH + visionH / 2, -intDepth);
-    gr.add(backWall);
+    // One opaque plane spanning the full facade width, positioned `intDepth` inside
+    // the glass. Shows as warm-cream surface through transparent curtain wall —
+    // looks like room interiors. Skipped entirely when backDepthM:0 was passed
+    // (concave-adjacent edges — no interior depth, clean flat facade).
+    if(!skipBackWall){
+      var backWall = new THREE.Mesh(
+        new THREE.PlaneGeometry(w - 0.05, visionH - 0.04),
+        MAT.unitInterior
+      );
+      backWall.position.set(0, fy + spH + visionH / 2, -intDepth);
+      gr.add(backWall);
+    }
     // ── PARTITION WALLS — vertical dividers between apartment units (every unitWidthBays bays) ──
-    for(var pw = unitWidthBays; pw < nBays; pw += unitWidthBays){
-      var pwx = pw * actualBayW - w / 2;
-      // Wall: thin in X (along facade), tall in Y, deep in Z (perpendicular to facade)
+    // Skip when intDepth is very shallow (concave-edge walls) — partitions wouldn't be visible anyway
+    // and could create visual noise.
+    if(!skipBackWall && intDepth >= 1.0){
+      for(var pw = unitWidthBays; pw < nBays; pw += unitWidthBays){
+        var pwx = pw * actualBayW - w / 2;
+        // Wall: thin in X (along facade), tall in Y, deep in Z (perpendicular to facade)
+        gr.add(mk(
+          new THREE.BoxGeometry(0.06, visionH - 0.04, slabDepth),
+          MAT.intWall,
+          pwx, fy + spH + visionH / 2, -intDepth / 2
+        ));
+      }
+      // ── FLOOR/CEILING SLAB inside each floor — thin horizontal divider at storey lines ──
+      // Caps the unit interior so adjacent floors don't blend at night
       gr.add(mk(
-        new THREE.BoxGeometry(0.06, visionH - 0.04, intDepth - 0.05),
-        MAT.intWall,
-        pwx, fy + spH + visionH / 2, -intDepth / 2
+        new THREE.BoxGeometry(w - 0.05, 0.08, slabDepth),
+        MAT.spandrel,
+        0, fy + 0.04, -intDepth / 2
       ));
     }
-    // ── FLOOR/CEILING SLAB inside each floor — thin horizontal divider at storey lines ──
-    // Caps the unit interior so adjacent floors don't blend at night
-    gr.add(mk(
-      new THREE.BoxGeometry(w - 0.05, 0.08, intDepth - 0.05),
-      MAT.spandrel,
-      0, fy + 0.04, -intDepth / 2
-    ));
     for(var b = 0; b < nBays; b++){
       var bx = b * actualBayW - w / 2 + actualBayW / 2;
       // Spandrel panel
@@ -677,28 +1139,44 @@ function addCurtainWall(parent, ox, oy, oz, w, floors, fh, rotY, opts){
   return gr;
 }
 
-/* Balcony unit helper — concrete slab + glass railing + steel cap rail + corner posts
-   Always uses MAT materials */
+/* Balcony unit helper — concrete slab + opaque railing + steel cap rail + posts.
+   Coordinate convention: the GROUP'S Y position (the y argument) is the floor's
+   walkable surface — the slab TOP sits at y, slab bottom at y-slabH, railing
+   extends upward from y to y+rH. This keeps the balcony floor level visually
+   continuous with the building's floor on the same level. */
 function addBalconyUnit(parent, x, y, z, w, proj, rotY){
   var gr = new THREE.Group();
   var rH = 1.07;
-  var slabH = 0.15;
-  // Concrete slab (dark so it doesn't blow out under ACES)
-  gr.add(mk(new THREE.BoxGeometry(w, slabH, proj), MAT.concreteDark, 0, slabH / 2, proj / 2));
-  // Slab soffit (darker underside visible from below)
-  var _soffitMat = new THREE.MeshStandardMaterial({color:0x2a2826, roughness:0.85, metalness:0.02});
-  gr.add(mk(new THREE.BoxGeometry(w - 0.02, 0.02, proj - 0.02), _soffitMat, 0, 0.01, proj / 2));
-  // Glass railing front — BoxGeometry for visibility
-  gr.add(mk(new THREE.BoxGeometry(w - 0.3, rH, 0.02), MAT.glassRailing, 0, slabH + rH / 2, proj - 0.01));
-  // Steel cap rail
-  gr.add(mk(new THREE.BoxGeometry(w + 0.04, 0.05, 0.06), MAT.steelDark, 0, slabH + rH + 0.025, proj - 0.01));
-  // Corner posts
-  for(var s = -1; s <= 1; s += 2){
-    gr.add(mk(new THREE.BoxGeometry(0.04, rH + slabH, 0.04), MAT.steelDark, s * (w / 2 - 0.02), (rH + slabH) / 2, proj));
+  var slabH = 0.30;
+  /* Opaque materials with proper depth testing — no bleed-through. */
+  var _balcSlabMat = new THREE.MeshBasicMaterial({color:0xe8e4dc, toneMapped:false});
+  var _soffitMat   = new THREE.MeshBasicMaterial({color:0x444038, toneMapped:false});
+  var _railMat     = new THREE.MeshBasicMaterial({color:0x4a5560, toneMapped:false});
+  var _capMat      = new THREE.MeshBasicMaterial({color:0x1a1a1a, toneMapped:false});
+
+  function _addM(geo, mat, px, py, pz){
+    var m = new THREE.Mesh(geo, mat);
+    m.position.set(px, py, pz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    gr.add(m);
+    return m;
   }
-  // Side glass panels
+  /* Slab — top surface at local y=0 (= floor level), extends downward by slabH. */
+  _addM(new THREE.BoxGeometry(w, slabH, proj), _balcSlabMat, 0, -slabH / 2, proj / 2);
+  /* Slab soffit (under-side detail). */
+  _addM(new THREE.BoxGeometry(w - 0.02, 0.04, proj - 0.02), _soffitMat, 0, -slabH + 0.02, proj / 2);
+  /* Front railing — sits ON the slab top (y=0) and extends up to y=rH. */
+  _addM(new THREE.BoxGeometry(w - 0.05, rH, 0.05), _railMat, 0, rH / 2, proj - 0.025);
+  /* Steel cap rail — at top of railing. */
+  _addM(new THREE.BoxGeometry(w + 0.10, 0.10, 0.12), _capMat, 0, rH + 0.05, proj - 0.025);
+  /* Corner posts — span from slab bottom (-slabH) to railing top (rH). */
   for(var s = -1; s <= 1; s += 2){
-    gr.add(mk(new THREE.BoxGeometry(0.02, rH, proj - 0.1), MAT.glassRailing, s * (w / 2 - 0.01), slabH + rH / 2, proj / 2));
+    _addM(new THREE.BoxGeometry(0.08, rH + slabH, 0.08), _capMat, s * (w / 2 - 0.04), (rH - slabH) / 2, proj);
+  }
+  /* Side panels — same vertical range as front railing. */
+  for(var s = -1; s <= 1; s += 2){
+    _addM(new THREE.BoxGeometry(0.05, rH, proj - 0.1), _railMat, s * (w / 2 - 0.025), rH / 2, proj / 2);
   }
   gr.position.set(x, y, z);
   if(rotY) gr.rotation.y = rotY;
@@ -720,11 +1198,7 @@ function rebuildBuilding(){
   var lotMinX = Math.min.apply(null, allX), lotMaxX = Math.max.apply(null, allX);
 
   // ═══ GROUND PLANE — handled by rebuildEnvironment, not duplicated here ═══
-  // Lot outline glow
-  var lotPts = vts.map(function(v){ return new THREE.Vector3(f2m(v[0]), 0.03, f2m(v[1])); });
-  if(lotPts.length > 0) lotPts.push(lotPts[0].clone());
-  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(lotPts),
-    new THREE.LineBasicMaterial({color:0x88aacc, transparent:true, opacity:0.6})));
+  // Lot outline is rendered by rebuildLot() — no duplicate needed here.
 
   // ═══ PRE-COMPUTE VOLUME BOUNDING BOXES ═══
   // Point-in-polygon test (meter coordinates)
@@ -843,6 +1317,18 @@ function rebuildBuilding(){
   //  VOLUME LOOP
   // ═══════════════════════════════════════════════════════════
   P.vols.forEach(function(vol, vi){
+    // ── Asset-class isolation ──────────────────────────────────────────
+    //    Skip industrial volumes entirely — they are rendered by the
+    //    dedicated industrial-decor pipeline in optimal-massing-industrial.js
+    //    (parapet, IMP cladding, dock doors, RTUs, etc.). The previous
+    //    "hide-and-replace" pattern (residential renders over the warehouse,
+    //    then a brute-force scene-traversal hides everything inside the lot)
+    //    was the source of repeated regressions where residential walls
+    //    disappeared. Single-property check ('industrial' flag set by
+    //    _makeVol in the industrial generator) — does NOT match on
+    //    vol.kind to avoid false-positives on residential mixed-use vols
+    //    that legitimately use kind === 'office' for ground-floor commercial.
+    if(vol && vol.industrial === true) return;
     var hasComm = !!vol.commGF;
     var customGF = vol.gfHeight > 0 ? f2m(vol.gfHeight) : 0;
     var storeyH = customGF > 0 ? customGF : (hasComm ? f2m(P.flr.gf) : f2m(P.flr.typ));
@@ -931,6 +1417,13 @@ function rebuildBuilding(){
         });
       }
 
+      // Podium polygon in metres for inside-test outward-normal disambiguation.
+      // Required because polyCX/polyCZ (centroid) sits OUTSIDE the polygon for
+      // L-shapes / T-shapes — concave corner notches pull the centroid into
+      // empty space — which inverts the centroid-direction "outward" guess for
+      // every edge near the concave area. Using a point-in-polygon probe is
+      // robust regardless of polygon shape.
+      var _podPolyM_eN = closedPts.map(function(p){ return [f2m(p[0]), f2m(p[1])]; });
       function edgeNormals(p0, p1){
         var dx = f2m(p1[0] - p0[0]), dz = f2m(p1[1] - p0[1]);
         var len = Math.sqrt(dx * dx + dz * dz);
@@ -938,6 +1431,15 @@ function rebuildBuilding(){
         var n1x = -dz / len, n1z = dx / len;
         var n2x = dz / len, n2z = -dx / len;
         var mx2 = f2m((p0[0] + p1[0]) / 2), mz2 = f2m((p0[1] + p1[1]) / 2);
+        // Probe each candidate normal a small distance beyond the edge — the
+        // candidate whose probe lands OUTSIDE the polygon is the outward one.
+        var probe = 0.1;
+        if(_podPolyM_eN && _podPolyM_eN.length >= 3){
+          var n1Out = !_pipM(mx2 + n1x * probe, mz2 + n1z * probe, _podPolyM_eN);
+          if(n1Out) return [{nx:n1x, nz:n1z}];
+          return [{nx:n2x, nz:n2z}];
+        }
+        // Fallback: centroid direction (only used if no polygon available).
         var toCX = mx2 - polyCX, toCZ = mz2 - polyCZ;
         var dot1 = n1x * toCX + n1z * toCZ;
         var dot2 = n2x * toCX + n2z * toCZ;
@@ -947,6 +1449,38 @@ function rebuildBuilding(){
       function normalCardinal(nx, nz){
         if(Math.abs(nz) > Math.abs(nx)) return nz < 0 ? 'N' : 'S';
         return nx > 0 ? 'E' : 'W';
+      }
+
+      // ── CONCAVE-VERTEX DETECTION ──
+      // Flag every vertex of the polygon as convex or concave (interior angle).
+      // The curtain-wall renderer uses this to decide whether to draw the
+      // INTERIOR BACK WALL (3.2m behind the glass): on edges adjacent to concave
+      // vertices the back wall would poke through the OPPOSITE facade and be
+      // visible from outside as a white wall — the "wall leaking outside the
+      // building" rendering bug. Detection is a simple cross-product sign test
+      // at each vertex; result is cached in `_isConcaveVertex[i]` (true=concave).
+      var _polySignedArea = 0;
+      for(var _pa = 0; _pa < closedPts.length; _pa++){
+        var _pb = (_pa + 1) % closedPts.length;
+        _polySignedArea += closedPts[_pa][0]*closedPts[_pb][1] - closedPts[_pb][0]*closedPts[_pa][1];
+      }
+      var _polyIsCCW = _polySignedArea > 0;
+      var _isConcaveVertex = new Array(closedPts.length);
+      for(var _ci = 0; _ci < closedPts.length; _ci++){
+        var _pp = closedPts[(_ci - 1 + closedPts.length) % closedPts.length];
+        var _pc = closedPts[_ci];
+        var _pn = closedPts[(_ci + 1) % closedPts.length];
+        var _e1x = _pc[0] - _pp[0], _e1y = _pc[1] - _pp[1];
+        var _e2x = _pn[0] - _pc[0], _e2y = _pn[1] - _pc[1];
+        var _cross = _e1x * _e2y - _e1y * _e2x;
+        // For CCW polygon: cross > 0 = convex (left turn); cross < 0 = concave
+        // For CW polygon: invert
+        _isConcaveVertex[_ci] = _polyIsCCW ? (_cross < 0) : (_cross > 0);
+      }
+      // An EDGE needs noBackWall if EITHER endpoint is a concave vertex
+      function _edgeAdjacentToConcave(edgeIdx){
+        var endIdx = (edgeIdx + 1) % closedPts.length;
+        return _isConcaveVertex[edgeIdx] || _isConcaveVertex[endIdx];
       }
 
       var towerFloors = isMidrise ? 0 : vol.storeys - 1 - podiumFloors;
@@ -977,7 +1511,13 @@ function rebuildBuilding(){
           for(var ni = 0; ni < normals.length; ni++){
             var nx = normals[ni].nx, nz = normals[ni].nz;
             var angle = Math.atan2(nx, nz);
-            addCurtainWall(g, mx + nx * 0.01, 0, mz + nz * 0.01, edgeLenM, 1, storeyH, angle, {bayWidth:3.0});
+            addCurtainWall(g, mx + nx * 0.01, 0, mz + nz * 0.01, edgeLenM, 1, storeyH, angle, {
+              bayWidth: 3.0,
+              // Concave-adjacent edges: skip ALL interior depth (back wall,
+              // partitions, slabs). The curtain wall becomes a flat glass
+              // facade with no elements projecting into the concave dent.
+              backDepthM: _edgeAdjacentToConcave(ei) ? 0.0 : 3.2
+            });
           }
         }
       } else {
@@ -998,6 +1538,13 @@ function rebuildBuilding(){
             var card = normalCardinal(nx, nz);
             var sfOverride = (card === 'N' ? vol.storefrontN : card === 'S' ? vol.storefrontS : card === 'E' ? vol.storefrontE : vol.storefrontW);
             var doStorefront = sfOverride !== undefined ? !!sfOverride : isStreetFace;
+            /* Abutment check for GROUND FLOOR: pass floorMidYM = storeyH/2
+               (middle of GF). Any neighbour with height >= GF mid-height
+               blocks GF storefront / windows. Most real-world buildings
+               are at least one storey, so almost any neighbour will trip
+               this — which is correct for GF. */
+            var isAbutted = _isEdgeAbuttedByContext(p0, p1, nx, nz, storeyH * 0.5);
+            if(isAbutted) doStorefront = false;
             var gfGr = new THREE.Group();
             if(doStorefront){
               var sfGlassH = storeyH * 0.75, sfBaseH = storeyH * 0.1;
@@ -1015,11 +1562,14 @@ function rebuildBuilding(){
             } else {
               var gfWall = new THREE.Mesh(new THREE.PlaneGeometry(edgeLenM, storeyH), claddingMat);
               gfWall.position.set(0, storeyH / 2, 0.005); gfGr.add(gfWall);
-              var nWinGf = Math.max(1, Math.floor(edgeLenM / 3));
-              for(var wi = 0; wi < nWinGf; wi++){
-                var winCX = (wi + 0.5) / nWinGf * edgeLenM - edgeLenM / 2;
-                var wm = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.2), MAT.glass);
-                wm.position.set(winCX, storeyH * 0.55, 0.01); gfGr.add(wm);
+              /* Suppress punched GF windows on abutted edges — solid wall only. */
+              if(!isAbutted){
+                var nWinGf = Math.max(1, Math.floor(edgeLenM / 3));
+                for(var wi = 0; wi < nWinGf; wi++){
+                  var winCX = (wi + 0.5) / nWinGf * edgeLenM - edgeLenM / 2;
+                  var wm = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.2), MAT.glass);
+                  wm.position.set(winCX, storeyH * 0.55, 0.01); gfGr.add(wm);
+                }
               }
             }
             gfGr.position.set(mx + nx * 0.01, 0, mz + nz * 0.01);
@@ -1044,7 +1594,14 @@ function rebuildBuilding(){
         var towerPolyCX = polyCX, towerPolyCZ = polyCZ; // centroid in metres
         var twrShape = shapeWithHoles; // tower shape (updated if stepback applies)
 
-        // Edge normal helper for tower polygon (uses tower centroid)
+        // Edge normal helper for tower polygon. Picks the outward-facing
+        // perpendicular by point-in-polygon test rather than direction-from-
+        // centroid. The centroid method is INCORRECT for concave polygons
+        // (L-shapes, T-shapes) — for those the centroid lies in the concave
+        // notch, OUTSIDE the polygon, which inverts the "outward" direction
+        // for every edge near the concave area. The visible symptom was
+        // tower curtain walls facing inward at concave frontages, leaving
+        // those frontages looking like the tower had no stepback.
         function towerEdgeNormals(p0, p1){
           var dx = f2m(p1[0] - p0[0]), dz = f2m(p1[1] - p0[1]);
           var len = Math.sqrt(dx * dx + dz * dz);
@@ -1052,6 +1609,24 @@ function rebuildBuilding(){
           var n1x = -dz / len, n1z = dx / len;
           var n2x = dz / len, n2z = -dx / len;
           var mx2 = f2m((p0[0] + p1[0]) / 2), mz2 = f2m((p0[1] + p1[1]) / 2);
+          // Use the inset (tower) polygon if we have it, otherwise the podium
+          // polygon — both work because both have the same handedness near
+          // each edge and we're testing a point just past the boundary.
+          var testPolyM = null;
+          if(typeof towerClosedPtsFt !== 'undefined' && towerClosedPtsFt && towerClosedPtsFt.length >= 3){
+            testPolyM = towerClosedPtsFt.map(function(p){ return [f2m(p[0]), f2m(p[1])]; });
+          } else if(typeof podiumPolyM !== 'undefined' && podiumPolyM){
+            testPolyM = podiumPolyM;
+          }
+          if(testPolyM){
+            // 0.1m probe — small enough to stay within the polygon's voronoi
+            // region of this edge (no cross-edge bleed).
+            var probe = 0.1;
+            var n1Outside = !_pipM(mx2 + n1x * probe, mz2 + n1z * probe, testPolyM);
+            if(n1Outside) return [{nx:n1x, nz:n1z}];
+            return [{nx:n2x, nz:n2z}];
+          }
+          // No polygon available — fall back to centroid direction.
           var toCX = mx2 - towerPolyCX, toCZ = mz2 - towerPolyCZ;
           var dot1 = n1x * toCX + n1z * toCZ;
           var dot2 = n2x * toCX + n2z * toCZ;
@@ -1060,27 +1635,101 @@ function rebuildBuilding(){
         }
 
         if(twrFloors > 0){
-          var stepM = hasExplicitPodium ? f2m(vol.stepbackAmt || 10) : 0;
+          var stepFtRen = hasExplicitPodium ? (vol.stepbackAmt != null ? vol.stepbackAmt : 10) : 0;
+          var stepM = f2m(stepFtRen);
           if(stepM > 0 && closedPts.length >= 3){
-            // Inset the polygon by stepM metres on all sides using centroid shrink.
-            // Coordinates in metres; shape uses negated Z to match main shape convention.
-            var cxAvg = 0, czAvg = 0;
-            for(var si = 0; si < closedPts.length; si++){ cxAvg += f2m(closedPts[si][0]); czAvg += f2m(closedPts[si][1]); }
-            cxAvg /= closedPts.length; czAvg /= closedPts.length;
+            // Inset the polygon perpendicular to each edge by stepFtRen feet.
+            // Uses the same edge-perpendicular offset as optimal-massing.js
+            // _insetPolygon so the tower faces stay PARALLEL to the podium
+            // faces. The previous centroid-radial shrink rotated edges,
+            // producing the tilted-tower-over-podium artifact for irregular
+            // (multi-parcel) lots.
             var towerPts = [];
             var towerPtsFt = []; // parallel array in feet for facade loops
-            for(var si2 = 0; si2 < closedPts.length; si2++){
-              var px2 = f2m(closedPts[si2][0]), pz2 = f2m(closedPts[si2][1]);
-              var dx2 = px2 - cxAvg, dz2 = pz2 - czAvg;
-              var dist2 = Math.sqrt(dx2*dx2 + dz2*dz2);
-              if(dist2 > 0.01){
-                var scale2 = Math.max(0.3, (dist2 - stepM) / dist2);
-                var inX = cxAvg + dx2 * scale2, inZ = czAvg + dz2 * scale2;
-                // Shape convention: (x_metres, -z_metres) — negate Z to match main shape
-                towerPts.push(new THREE.Vector2(inX, -inZ));
-                towerPtsFt.push([inX / f2m(1), inZ / f2m(1)]); // feet: keep positive Z
+            var lotRingFt = closedPts.slice();
+            if(lotRingFt[0][0] !== lotRingFt[lotRingFt.length-1][0] || lotRingFt[0][1] !== lotRingFt[lotRingFt.length-1][1]){
+              lotRingFt.push(lotRingFt[0].slice());
+            }
+            var insetFtRing = null;
+            try {
+              if(typeof _insetPolygon === 'function'){
+                insetFtRing = _insetPolygon(lotRingFt, stepFtRen);
+              }
+            } catch(e){ insetFtRing = null; }
+
+            if(insetFtRing && insetFtRing.length >= 4){
+              // Strip closing duplicate vertex (matches towerPtsFt convention)
+              var insetOpen = insetFtRing.slice(0, -1);
+              for(var ti = 0; ti < insetOpen.length; ti++){
+                var fxR = insetOpen[ti][0], fzR = insetOpen[ti][1];
+                towerPts.push(new THREE.Vector2(f2m(fxR), -f2m(fzR)));
+                towerPtsFt.push([fxR, fzR]);
               }
             }
+
+            // Fallback: if proper inset is unavailable or returned the
+            // original poly (no stepback applied), use the original closedPts
+            // — tower with no stepback rather than ship a broken footprint.
+            if(towerPts.length < 3){
+              for(var ti2 = 0; ti2 < closedPts.length; ti2++){
+                var fxF = closedPts[ti2][0], fzF = closedPts[ti2][1];
+                towerPts.push(new THREE.Vector2(f2m(fxF), -f2m(fzF)));
+                towerPtsFt.push([fxF, fzF]);
+              }
+            }
+
+            // ── CLIP TOWER POLYGON TO LOT (PROPERTY-LINE GUARANTEE) ──
+            // The centroid-shrink inset above can push convex corners that are
+            // CLOSE to the polygon centroid OUTSIDE the original polygon — for
+            // L-shaped or notched lots, the tower vertex at a notch corner can
+            // land in the notch (which is OUTSIDE the property line). Without
+            // this clip, the tower would extend onto the neighbour's land.
+            //
+            // We clip the inset polygon to the volume's customPolyLocal (which
+            // = the lot polygon for optimal-massing volumes) using turf.intersect.
+            // Result: tower can never extend outside the property.
+            if(towerPtsFt.length >= 3 && typeof turf !== 'undefined' && turf.intersect && pts && pts.length >= 4){
+              try {
+                // Build the bounding building polygon ring (in feet, closed)
+                var lotRing = pts.slice();
+                if(lotRing[0][0] !== lotRing[lotRing.length-1][0] || lotRing[0][1] !== lotRing[lotRing.length-1][1]){
+                  lotRing.push([lotRing[0][0], lotRing[0][1]]);
+                }
+                // Build the inset tower ring (in feet, closed)
+                var insetRing = towerPtsFt.slice();
+                insetRing.push([insetRing[0][0], insetRing[0][1]]);
+                var lotPolyT = turf.polygon([lotRing]);
+                var insetPolyT = turf.polygon([insetRing]);
+                var clipped = null;
+                try { clipped = turf.intersect(turf.featureCollection([insetPolyT, lotPolyT])); }
+                catch(e){ try { clipped = turf.intersect(insetPolyT, lotPolyT); } catch(e2){ clipped = null; } }
+                if(clipped && clipped.geometry){
+                  // Use the largest polygon piece if clipping produced a MultiPolygon
+                  var clippedCoords;
+                  if(clipped.geometry.type === 'MultiPolygon'){
+                    var bestArea = 0;
+                    clipped.geometry.coordinates.forEach(function(rings){
+                      var r0 = rings[0]; var a = 0;
+                      for(var i = 0; i < r0.length - 1; i++) a += r0[i][0]*r0[i+1][1] - r0[i+1][0]*r0[i][1];
+                      var area = Math.abs(a/2);
+                      if(area > bestArea){ bestArea = area; clippedCoords = r0; }
+                    });
+                  } else {
+                    clippedCoords = clipped.geometry.coordinates[0];
+                  }
+                  if(clippedCoords && clippedCoords.length >= 4){
+                    // Drop the closing duplicate to match towerPtsFt convention
+                    var clippedOpen = clippedCoords.slice(0, -1);
+                    if(clippedOpen.length >= 3){
+                      towerPtsFt = clippedOpen;
+                      // Re-derive towerPts (Three.js Vector2 array, with -Z convention)
+                      towerPts = clippedOpen.map(function(p){ return new THREE.Vector2(f2m(p[0]), -f2m(p[1])); });
+                    }
+                  }
+                }
+              } catch(e){ /* clipping failed — fall back to unclipped inset */ }
+            }
+
             if(towerPts.length >= 3){
               // Ensure correct winding (counter-clockwise in shape space)
               var twrSignedArea = 0;
@@ -1133,10 +1782,29 @@ function rebuildBuilding(){
               var pWinW2 = upperH * 0.5;
               var pWinH2 = upperH * 0.55;
               var polySeed = Math.abs(Math.round((mx3 + mz3 * 7.13) * 1000)) % 9999;
+              /* Edge length in feet — used to convert window's face-local
+                 X (in metres) to a fraction along the edge for per-window
+                 abutment probing. */
+              var eLenFt = eLen2;
               for(var pfl = 0; pfl < podiumFloors; pfl++){
                 var pflBase = pfl * upperH;
+                /* PER-FLOOR + PER-WINDOW abutment. floorMidYM is the world-Y
+                   middle of this floor. For each individual window we project
+                   its world-XZ position back to the edge, then probe outward
+                   ~10 ft to catch neighbours up to a typical urban setback
+                   away. A neighbour only suppresses a window if it's tall
+                   enough to reach this floor. */
+                var floorMidYM = storeyH + pflBase + upperH * 0.5;
                 for(var pwi = 0; pwi < pWinCols; pwi++){
                   var pwinCX = -eLM2/2 + pActualSpacing/2 + pwi * pActualSpacing;
+                  /* Per-window probe — convert face-local X (metres) to edge
+                     fraction t (0..1), interpolate world-feet position. */
+                  var tEdge = (pwinCX + eLM2/2) / eLM2;
+                  var winXFt = pp0[0] + (pp1[0] - pp0[0]) * tEdge;
+                  var winZFt = pp0[1] + (pp1[1] - pp0[1]) * tEdge;
+                  if(_isPointAbuttedByContext(winXFt, winZFt, enx, enz, floorMidYM, 10)){
+                    continue;
+                  }
                   podFGr.add(new THREE.Mesh(new THREE.PlaneGeometry(pWinW2, pWinH2), MAT.punchedWin));
                   podFGr.children[podFGr.children.length-1].position.set(pwinCX, pflBase + upperH * 0.55, 0.3);
                   // Interior unit glow — visible at night
@@ -1214,6 +1882,128 @@ function rebuildBuilding(){
               g.add(planterGr);
             }
           }
+
+          // ── BISTRO FURNITURE ON GREEN ROOF TERRACE ──
+          // Distributes outdoor bistro sets (round table + 4 chairs) across
+          // the green roof. Sets are placed INWARD from each podium edge
+          // midpoint, with a tower-polygon check so nothing lands inside
+          // the tower footprint. Pure ShapeGeometry — no edge-to-edge
+          // alignment needed, so no concave-corner artifacts.
+          var twrPolyM = null;
+          if(typeof towerClosedPtsFt !== 'undefined' && towerClosedPtsFt.length >= 3){
+            twrPolyM = towerClosedPtsFt.map(function(p){return [f2m(p[0]), f2m(p[1])];});
+          }
+          var bistroPodiumPolyM = closedPts.map(function(p){ return [f2m(p[0]), f2m(p[1])]; });
+          var _bistroTopMat = new THREE.MeshBasicMaterial({color: 0xf2efe8, toneMapped: false});
+          var _bistroFrameMat = new THREE.MeshBasicMaterial({color: 0x2a2a2a, toneMapped: false});
+          var _bistroSeatMat = new THREE.MeshBasicMaterial({color: 0x8b6f47, toneMapped: false});
+          var _addBistroSet = function(cx, cy, cz){
+            var bgr = new THREE.Group();
+            // Table top
+            var tTop = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.40, 0.40, 0.05, 16),
+              _bistroTopMat
+            );
+            tTop.position.y = 0.74; bgr.add(tTop);
+            // Table pedestal
+            var tPed = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.04, 0.06, 0.74, 8),
+              _bistroFrameMat
+            );
+            tPed.position.y = 0.37; bgr.add(tPed);
+            // Table base disc
+            var tBase = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.18, 0.18, 0.03, 12),
+              _bistroFrameMat
+            );
+            tBase.position.y = 0.015; bgr.add(tBase);
+            // 4 chairs distributed around the table
+            for(var ci = 0; ci < 4; ci++){
+              var ang = ci * Math.PI / 2 + Math.PI / 4;
+              var radius = 0.85;
+              var ccx = Math.cos(ang) * radius;
+              var ccz = Math.sin(ang) * radius;
+              // Chair seat
+              var seat = new THREE.Mesh(
+                new THREE.BoxGeometry(0.40, 0.05, 0.40),
+                _bistroSeatMat
+              );
+              seat.position.set(ccx, 0.45, ccz); bgr.add(seat);
+              // Chair back
+              var backX = ccx + Math.cos(ang) * 0.18;
+              var backZ = ccz + Math.sin(ang) * 0.18;
+              var back = new THREE.Mesh(
+                new THREE.BoxGeometry(0.40, 0.45, 0.04),
+                _bistroSeatMat
+              );
+              back.position.set(backX, 0.67, backZ);
+              back.rotation.y = -ang + Math.PI / 2;
+              bgr.add(back);
+              // Chair legs (4 thin posts)
+              for(var li = 0; li < 4; li++){
+                var lAng = li * Math.PI / 2 + Math.PI / 4;
+                var lx = ccx + Math.cos(lAng) * 0.16;
+                var lz = ccz + Math.sin(lAng) * 0.16;
+                var leg = new THREE.Mesh(
+                  new THREE.BoxGeometry(0.03, 0.45, 0.03),
+                  _bistroFrameMat
+                );
+                leg.position.set(lx, 0.225, lz); bgr.add(leg);
+              }
+            }
+            bgr.position.set(cx, cy, cz);
+            // Random rotation so multiple sets don't all face same way
+            bgr.rotation.y = ((cx * 7.31 + cz * 3.17) % (Math.PI * 2));
+            g.add(bgr);
+          };
+          // Walk podium edges and place a bistro set inboard of each
+          for(var bei = 0; bei < closedPts.length; bei++){
+            var bp0 = closedPts[bei], bp1 = closedPts[(bei + 1) % closedPts.length];
+            var bDx = bp1[0] - bp0[0], bDz = bp1[1] - bp0[1];
+            var bLen = Math.sqrt(bDx * bDx + bDz * bDz);
+            if(bLen < 6) continue;
+            var bMx = f2m((bp0[0] + bp1[0]) / 2);
+            var bMz = f2m((bp0[1] + bp1[1]) / 2);
+            // Inward normal (opposite of edgeNormals' outward direction)
+            var bNorms = edgeNormals(bp0, bp1);
+            for(var bni = 0; bni < bNorms.length; bni++){
+              var bnx = -bNorms[bni].nx, bnz = -bNorms[bni].nz;
+              // Step 2.5 m inboard from edge midpoint
+              var bsX = bMx + bnx * 2.5;
+              var bsZ = bMz + bnz * 2.5;
+              // Skip if inside tower footprint
+              if(twrPolyM && _pipM(bsX, bsZ, twrPolyM)) continue;
+              // Skip if outside podium polygon (defensive)
+              if(!_pipM(bsX, bsZ, bistroPodiumPolyM)) continue;
+              _addBistroSet(bsX, terrY, bsZ);
+            }
+          }
+
+          // ── POLYGON TERRACE AREA LABEL ──
+          // Compute terrace area = podium footprint minus tower footprint
+          var podiumAreaM2 = 0;
+          try {
+            // Podium area from shape (using shoelace formula in metres)
+            for(var tai = 0; tai < shapePts.length; tai++){
+              var taj = (tai + 1) % shapePts.length;
+              podiumAreaM2 += shapePts[tai][0] * shapePts[taj][1] - shapePts[taj][0] * shapePts[tai][1];
+            }
+            podiumAreaM2 = Math.abs(podiumAreaM2) / 2;
+          } catch(e){}
+          var towerAreaM2 = 0;
+          if(typeof towerClosedPtsFt !== 'undefined' && towerClosedPtsFt.length >= 3){
+            var twrPtsM = towerClosedPtsFt.map(function(p){return [f2m(p[0]), f2m(p[1])];});
+            for(var tti = 0; tti < twrPtsM.length; tti++){
+              var ttj = (tti + 1) % twrPtsM.length;
+              towerAreaM2 += twrPtsM[tti][0] * twrPtsM[ttj][1] - twrPtsM[ttj][0] * twrPtsM[tti][1];
+            }
+            towerAreaM2 = Math.abs(towerAreaM2) / 2;
+          }
+          var terraceSF = Math.round((podiumAreaM2 - towerAreaM2) * 10.7639); // m² to sf
+          if(terraceSF > 50){
+            addTextSprite(g, 'AMENITY TERRACE', polyCX, terrY + 0.5, polyCZ, '#AEBC46', 0.35);
+            addTextSprite(g, terraceSF.toLocaleString() + ' sf', polyCX, terrY + 0.1, polyCZ, '#ffffff', 0.28);
+          }
         }
 
         // Tower floors (curtain wall) per edge — use INSET tower polygon, not podium polygon
@@ -1237,13 +2027,69 @@ function rebuildBuilding(){
               var probePx = cmx + cnx * probeD, probePz = cmz + cnz * probeD;
               if(_pipM(probePx, probePz, podiumPolyM)) continue;
               var edgeAngle = Math.atan2(cnx, cnz);
-              addCurtainWall(g, cmx + cnx * 0.01, towerBaseY, cmz + cnz * 0.01, cELM, twrFloors, upperH, edgeAngle, {bayWidth:3.0});
+              // Tower edges always render with ZERO interior depth — the curtain
+              // wall is just glass + mullions + spandrels, no back walls, no
+              // partition walls between "apartments", no interior floor slabs.
+              // Those interior elements were misaligning on irregular polygon
+              // towers (visible as misplaced internal walls through the glass),
+              // so they're disabled for the tower entirely.
+              addCurtainWall(g, cmx + cnx * 0.01, towerBaseY, cmz + cnz * 0.01, cELM, twrFloors, upperH, edgeAngle, {
+                bayWidth: 3.0,
+                backDepthM: 0
+              });
             }
           }
         }
 
-        // Balconies along polygon edges — use tower polygon for tower floors, podium polygon for podium floors
-        var showBalc = vol.balconies !== undefined ? !!vol.balconies : true;
+        // ── Balconies along polygon edges ──
+        // PROPERTY-LINE GUARANTEE: regardless of vol.balconies / balcN/S/E/W,
+        // a balcony will NEVER be drawn if its outer face would extend beyond
+        // the LOT polygon (the property line). This prevents the recurring
+        // "walls outside the building" issue where balconies project onto the
+        // neighbour's land. Lot polygon is fetched from lotVerts() in feet.
+        var _lotPolyPLForBalc = null;
+        if(typeof lotVerts === 'function'){
+          try {
+            var _lvForBalc = lotVerts();
+            if(_lvForBalc && _lvForBalc.length >= 3){
+              _lotPolyPLForBalc = _lvForBalc.slice();
+              if(_lotPolyPLForBalc[0][0] !== _lotPolyPLForBalc[_lotPolyPLForBalc.length-1][0] ||
+                 _lotPolyPLForBalc[0][1] !== _lotPolyPLForBalc[_lotPolyPLForBalc.length-1][1]){
+                _lotPolyPLForBalc.push([_lotPolyPLForBalc[0][0], _lotPolyPLForBalc[0][1]]);
+              }
+            }
+          } catch(e){}
+        }
+        function _ptInsideLotPL(xFt, zFt){
+          if(!_lotPolyPLForBalc) return true;        // no lot polygon — allow (rectangular volumes etc.)
+          var inside = false;
+          var n = _lotPolyPLForBalc.length - 1;
+          for(var pli = 0, plj = n - 1; pli < n; plj = pli++){
+            var xi = _lotPolyPLForBalc[pli][0], yi = _lotPolyPLForBalc[pli][1];
+            var xj = _lotPolyPLForBalc[plj][0], yj = _lotPolyPLForBalc[plj][1];
+            if(((yi > zFt) !== (yj > zFt)) && (xFt < (xj - xi) * (zFt - yi) / ((yj - yi) || 1e-9) + xi)) inside = !inside;
+          }
+          return inside;
+        }
+
+        /* Per-side flags (balcN/S/E/W) are AUTHORITATIVE — if any is on,
+           balconies render. The master `vol.balconies` toggle used to veto
+           everything even when per-side flags were on, which surprised users
+           (they'd toggle a side checkbox on and nothing would happen).
+           New rule:
+             - any per-side flag on  → showBalc = true
+             - all per-side flags off → showBalc = false
+             - per-side flags missing → fall back to master `vol.balconies`
+               (defaulting to true if it's also undefined). */
+        var anySideOn = !!(vol.balcN || vol.balcS || vol.balcE || vol.balcW);
+        var anySideDefined = vol.balcN !== undefined || vol.balcS !== undefined ||
+                             vol.balcE !== undefined || vol.balcW !== undefined;
+        var showBalc;
+        if(anySideDefined){
+          showBalc = anySideOn;          /* per-side wins */
+        } else {
+          showBalc = vol.balconies !== undefined ? !!vol.balconies : true;
+        }
         var bEvery = vol.balcEvery || 2;
         var bDep = f2m(vol.balcDepth || 4);
         if(showBalc && showWin && !hasOverlappingTaller){
@@ -1252,6 +2098,10 @@ function rebuildBuilding(){
             var bfy = storeyH + bf * upperH;
             // Use tower polygon for floors above podium, original polygon for podium floors
             var isTowerFloor = bf >= podiumFloors;
+            /* SKIP tower floors here — they're handled by the dedicated tower
+               balcony pass below, which uses simpler unconstrained logic that
+               actually produces visible balconies on the tower. */
+            if(isTowerFloor) continue;
             var balcEdgePts = isTowerFloor ? towerClosedPtsFt : closedPts;
             var balcNormFn = isTowerFloor ? towerEdgeNormals : edgeNormals;
             for(var bei = 0; bei < balcEdgePts.length; bei++){
@@ -1270,20 +2120,135 @@ function rebuildBuilding(){
                   if(_pipM(bMidX + onx * bProbeD, bMidZ + onz * bProbeD, podiumPolyM)) continue;
                 }
                 var bcard = normalCardinal(onx, onz);
+                /* Each cardinal direction now respects its OWN flag (vol.balcN
+                   for N edges, vol.balcS for S, etc.). Previous code wired N
+                   and S to the master `showBalc`, which meant clicking just
+                   "East" caused balconies to also appear on N and S edges
+                   because showBalc became true the moment any per-side flag
+                   was on.
+                   Backward-compat: if a per-side flag is `undefined` (e.g. an
+                   old saved project that never had directional flags), fall
+                   back to the master `showBalc` so legacy data still renders. */
                 var sideOk = true;
-                // N/S follow master; E/W only if explicitly enabled
-                if(bcard === 'N') sideOk = showBalc;
-                else if(bcard === 'S') sideOk = showBalc;
-                else if(bcard === 'E') sideOk = vol.balcE > 0;
-                else if(bcard === 'W') sideOk = vol.balcW > 0;
+                if(bcard === 'N')      sideOk = (vol.balcN !== undefined) ? vol.balcN > 0 : showBalc;
+                else if(bcard === 'S') sideOk = (vol.balcS !== undefined) ? vol.balcS > 0 : showBalc;
+                else if(bcard === 'E') sideOk = (vol.balcE !== undefined) ? vol.balcE > 0 : false;
+                else if(bcard === 'W') sideOk = (vol.balcW !== undefined) ? vol.balcW > 0 : false;
                 if(!sideOk) continue;
+                // ── CONCAVE-EDGE BALCONY SUPPRESSION ──
+                // At concave corners the balcony projects into a dent that's
+                // visible from outside the building. Even if the balcony is
+                // technically inside the lot, it looks like a wall "protruding"
+                // from the building when viewed through the concave gap. Skip
+                // balconies entirely on concave-adjacent edges.
+                if(_isConcaveVertex && _edgeAdjacentToConcave && _edgeAdjacentToConcave(bei)){
+                  continue;
+                }
                 var balcCount = Math.max(1, Math.floor(bELM / 4));
                 var balcW = bELM / balcCount - 0.3;
                 var normAngle = Math.atan2(onx, onz);
                 for(var bb = 0; bb < balcCount; bb++){
                   var bt = (bb + 0.5) / balcCount;
                   var bbx = f2m(bp0[0] + bdx * bt), bbz = f2m(bp0[1] + bdz * bt);
-                  addBalconyUnit(g, bbx + onx * 0.02, bfy, bbz + onz * 0.02, balcW, bDep, normAngle);
+                  /* PROPERTY-LINE CHECK (relaxed):
+                     Old behaviour rejected any balcony whose OUTER face extended
+                     past the lot polygon — but if the user has matched their
+                     building footprint to the lot (Match Lot button or default
+                     parametric width = lot width), every balcony's outer face is
+                     by definition past the lot edge, so all balconies were
+                     suppressed.
+                     New rule: check a probe point 1 ft INSIDE the building face
+                     (i.e. inside the volume mass). If that point is inside the
+                     lot polygon, the balcony is OK to draw — its visual mass
+                     belongs to this lot even if it cantilevers slightly past
+                     the property line. This still suppresses balconies on
+                     faces that point INTO an adjacent parcel (e.g. a side wall
+                     directly abutting another lot's interior). */
+                  var balcInnerXFt = bp0[0] + bdx * bt - onx * 1.0;
+                  var balcInnerZFt = bp0[1] + bdz * bt - onz * 1.0;
+                  if(!_ptInsideLotPL(balcInnerXFt, balcInnerZFt)){
+                    continue;
+                  }
+                  /* PER-BALCONY abutment check — probe at the balcony's OUTER
+                     edge (building face + balcony depth + small buffer) to
+                     catch neighbours that the balcony would project OVER, not
+                     just neighbours directly against the building wall. Each
+                     individual balcony gets its own decision based on its
+                     specific X-Z position along the edge AND this floor's Y. */
+                  var balcFloorMidYM = bfy + upperH * 0.5;
+                  /* Balcony's center XZ in lot-feet coords (it's at the building
+                     face — bbx/bbz are already the face-edge midpoint of THIS
+                     balcony in world metres; convert back to feet for probe). */
+                  var balcCenterXFt = bp0[0] + bdx * bt;
+                  var balcCenterZFt = bp0[1] + bdz * bt;
+                  /* Probe distance = balcony depth + 2 ft so we sample the
+                     balcony's outer-face position. If a neighbour sits there
+                     and is tall enough to reach this floor, drop the balcony. */
+                  var balcProbeFt = (vol.balcDepth || 4) + 2;
+                  if(_isPointAbuttedByContext(balcCenterXFt, balcCenterZFt, onx, onz, balcFloorMidYM, balcProbeFt)){
+                    continue;
+                  }
+                  /* Tiny 0.05m offset — balcony attaches directly to the building
+                     face like real architecture. The slab projects outward by
+                     `bDep` so it's still visible past the wall. */
+                  addBalconyUnit(g, bbx + onx * 0.05, bfy, bbz + onz * 0.05, balcW, bDep, normAngle);
+                }
+              }
+            }
+          }
+        }
+
+        /* ──────────────────────────────────────────────────────────────────────
+           DEDICATED TOWER BALCONY PASS — bypass-all-constraints
+           The constrained loop above produces no visible balconies on the tower
+           because of curtain wall occlusion / per-edge geometry quirks. This
+           second pass just iterates every tower polygon edge and adds visible
+           balconies. No concave check, no abutment check, no per-side toggle —
+           it draws unconditionally. Skipped when the tower has no upper floors
+           (e.g. midrise / podium-only volumes).
+           ────────────────────────────────────────────────────────────────── */
+        if(twrFloors > 0 && Array.isArray(towerClosedPtsFt) && towerClosedPtsFt.length >= 3 && showWin){
+          var twrBalcEvery = vol.balcEvery || 2;
+          /* Tower floor index — relative to the start of upper floors (bf=0
+             is the first floor above GF). Tower floors start at bf=podiumFloors. */
+          /* Skip tbf === podiumFloors (the FIRST tower floor immediately above
+             the podium). That floor gets a LARGE PATIO/TERRACE instead of small
+             projecting balconies — see the podium-roof patio rendering further
+             down. Without this skip, you'd see both small balconies AND a
+             patio on the same floor, looking cluttered. */
+          for(var tbf = podiumFloors + 1; tbf < upFloors; tbf++){
+            if((tbf - podiumFloors) % twrBalcEvery !== 0) continue;
+            var tbfy = storeyH + tbf * upperH;
+            for(var tbei = 0; tbei < towerClosedPtsFt.length; tbei++){
+              var tbp0 = towerClosedPtsFt[tbei];
+              var tbp1 = towerClosedPtsFt[(tbei + 1) % towerClosedPtsFt.length];
+              var tbELen = Math.sqrt((tbp1[0]-tbp0[0])*(tbp1[0]-tbp0[0]) + (tbp1[1]-tbp0[1])*(tbp1[1]-tbp0[1]));
+              if(tbELen < 6) continue;        /* skip tiny segments */
+              var tbELM = f2m(tbELen);
+              var tbnorms = towerEdgeNormals(tbp0, tbp1);
+              for(var tbni = 0; tbni < tbnorms.length; tbni++){
+                var tbnx = tbnorms[tbni].nx, tbnz = tbnorms[tbni].nz;
+                /* Filter using per-side toggles so user controls still work. */
+                var tbcard = normalCardinal(tbnx, tbnz);
+                var tbsideOk = true;
+                if(tbcard === 'N')      tbsideOk = vol.balcN === undefined ? true : vol.balcN > 0;
+                else if(tbcard === 'S') tbsideOk = vol.balcS === undefined ? true : vol.balcS > 0;
+                else if(tbcard === 'E') tbsideOk = vol.balcE === undefined ? true : vol.balcE > 0;
+                else if(tbcard === 'W') tbsideOk = vol.balcW === undefined ? true : vol.balcW > 0;
+                if(!tbsideOk) continue;
+                var tbAngle = Math.atan2(tbnx, tbnz);
+                /* One balcony every ~4m along the edge. */
+                var tbCount = Math.max(1, Math.floor(tbELM / 4));
+                var tbW = tbELM / tbCount - 0.3;
+                var tbDep = f2m(vol.balcDepth || 4);
+                var tbDx = tbp1[0] - tbp0[0], tbDz = tbp1[1] - tbp0[1];
+                for(var tbb = 0; tbb < tbCount; tbb++){
+                  var tbt = (tbb + 0.5) / tbCount;
+                  var tbbx = f2m(tbp0[0] + tbDx * tbt);
+                  var tbbz = f2m(tbp0[1] + tbDz * tbt);
+                  /* Tiny 0.05m offset — balcony attaches directly to the tower
+                     curtain wall instead of floating in space in front of it. */
+                  addBalconyUnit(g, tbbx + tbnx * 0.05, tbfy, tbbz + tbnz * 0.05, tbW, tbDep, tbAngle);
                 }
               }
             }
@@ -1301,6 +2266,12 @@ function rebuildBuilding(){
             var slabEdgePts = isTwrSlab ? towerClosedPtsFt : closedPts;
             var slabNormFn = isTwrSlab ? towerEdgeNormals : edgeNormals;
             for(var sei = 0; sei < slabEdgePts.length; sei++){
+              // Skip slab edge on concave-adjacent edges — slab would project
+              // into the concave dent and be visible from outside as a wall
+              // protrusion. Same rule as balconies and back walls.
+              if(_isConcaveVertex && _edgeAdjacentToConcave && _edgeAdjacentToConcave(sei)){
+                continue;
+              }
               var sp0 = slabEdgePts[sei], sp1 = slabEdgePts[(sei + 1) % slabEdgePts.length];
               var seLen = Math.sqrt((sp1[0] - sp0[0]) * (sp1[0] - sp0[0]) + (sp1[1] - sp0[1]) * (sp1[1] - sp0[1]));
               if(seLen < 2) continue;
@@ -1326,13 +2297,59 @@ function rebuildBuilding(){
       }
 
       // ── ROOF with parapet — use tower polygon if stepback exists ──
+      // Tower-green-roof toggle: read from localStorage. When ON, swap roof
+      // material to MAT.greenRoof so the user can visualize a green-roof
+      // retrofit and the stormwater calc gets a real retention credit.
+      var towerGreenOn = false;
+      try { towerGreenOn = (typeof localStorage !== 'undefined' && localStorage.getItem('cc_tower_green_roof') === '1'); } catch(e){}
       var roofMembraneMat = new THREE.MeshStandardMaterial({color:0x2a2828, roughness:0.95, metalness:0.01});
       var roofShape = (twrFloors > 0 && towerClosedPtsFt !== closedPts) ? twrShape : shapeWithHoles;
       var roofEdgePts = (twrFloors > 0 && towerClosedPtsFt !== closedPts) ? towerClosedPtsFt : closedPts;
       var roofNormFn = (twrFloors > 0 && towerClosedPtsFt !== closedPts) ? towerEdgeNormals : edgeNormals;
+      // Compute and cache the real roof polygon area for the consultant module
+      try {
+        if(Array.isArray(roofEdgePts) && roofEdgePts.length >= 3){
+          var rfA = 0;
+          for(var rfi = 0; rfi < roofEdgePts.length; rfi++){
+            var rfp = roofEdgePts[rfi];
+            var rfn = roofEdgePts[(rfi+1) % roofEdgePts.length];
+            if(!rfp || !rfn || rfp.length < 2 || rfn.length < 2) continue;
+            rfA += rfp[0]*rfn[1] - rfn[0]*rfp[1];
+          }
+          vol._towerRoofAreaSF = Math.abs(rfA) / 2;
+        }
+      } catch(e){ console.warn('[CC] tower roof area calc failed:', e); }
       var roofGeo2 = new THREE.ShapeGeometry(roofShape); roofGeo2.rotateX(-Math.PI / 2);
-      var roof2 = new THREE.Mesh(roofGeo2, roofMembraneMat);
+      var roofMatToUse = (towerGreenOn && typeof MAT !== 'undefined' && MAT.greenRoof) ? MAT.greenRoof : roofMembraneMat;
+      var roof2 = new THREE.Mesh(roofGeo2, roofMatToUse);
       roof2.position.y = totalH + 0.02; roof2.receiveShadow = true; g.add(roof2);
+      // Add scatter of shrub spheres on tower green roof for visual depth
+      if(towerGreenOn && typeof MAT !== 'undefined' && MAT.shrubA && roofEdgePts.length >= 3){
+        try {
+          var rxs = roofEdgePts.map(function(p){return p[0];});
+          var rzs = roofEdgePts.map(function(p){return p[1];});
+          var rMinX = Math.min.apply(null, rxs), rMaxX = Math.max.apply(null, rxs);
+          var rMinZ = Math.min.apply(null, rzs), rMaxZ = Math.max.apply(null, rzs);
+          var nShrubs = Math.min(40, Math.floor(vol._towerRoofAreaSF / 200));
+          for(var si = 0; si < nShrubs; si++){
+            var sx = rMinX + Math.random() * (rMaxX - rMinX);
+            var sz = rMinZ + Math.random() * (rMaxZ - rMinZ);
+            // Rough point-in-polygon check
+            var inside = false;
+            for(var pi=0, pj=roofEdgePts.length-1; pi<roofEdgePts.length; pj=pi++){
+              var pix=roofEdgePts[pi][0], piy=roofEdgePts[pi][1];
+              var pjx=roofEdgePts[pj][0], pjy=roofEdgePts[pj][1];
+              if(((piy>sz)!==(pjy>sz)) && (sx<(pjx-pix)*(sz-piy)/(pjy-piy)+pix)) inside = !inside;
+            }
+            if(!inside) continue;
+            var shrubR = 0.3 + Math.random() * 0.2;
+            var shrub = new THREE.Mesh(new THREE.SphereGeometry(shrubR, 8, 6), si % 2 === 0 ? MAT.shrubA : MAT.shrubB);
+            shrub.position.set(f2m(sx), totalH + 0.05 + shrubR * 0.7, f2m(sz));
+            shrub.scale.y = 0.65 + Math.random() * 0.2;
+            g.add(shrub);
+          }
+        } catch(e){}
+      }
       var resParapetH2 = 0.6;
       for(var rei = 0; rei < roofEdgePts.length; rei++){
         var rp0 = roofEdgePts[rei], rp1 = roofEdgePts[(rei + 1) % roofEdgePts.length];
@@ -1354,39 +2371,51 @@ function rebuildBuilding(){
 
       // ── MECHANICAL PENTHOUSE (tallest volume only) ──
       if(vol.storeys > 3 && vi === tallestVi){
+        // Use the tower polygon (inset) for sizing if available, otherwise podium
+        var mechRefW = polyBW, mechRefD = polyBD;
+        var mechCX = towerPolyCX, mechCZ = towerPolyCZ;
+        if(typeof towerClosedPtsFt !== 'undefined' && towerClosedPtsFt.length >= 3){
+          var mxs = towerClosedPtsFt.map(function(p){return f2m(p[0]);}), mzs = towerClosedPtsFt.map(function(p){return f2m(p[1]);});
+          mechRefW = Math.max.apply(null, mxs) - Math.min.apply(null, mxs);
+          mechRefD = Math.max.apply(null, mzs) - Math.min.apply(null, mzs);
+        }
+        // Align penthouse to longest edge of the roof polygon
         var longestEdgeLen = 0, longestAngle = 0;
-        for(var mei = 0; mei < closedPts.length; mei++){
-          var mp0 = closedPts[mei], mp1 = closedPts[(mei + 1) % closedPts.length];
+        var roofRef = (typeof towerClosedPtsFt !== 'undefined' && towerClosedPtsFt.length >= 3) ? towerClosedPtsFt : closedPts;
+        for(var mei = 0; mei < roofRef.length; mei++){
+          var mp0 = roofRef[mei], mp1 = roofRef[(mei + 1) % roofRef.length];
           var meLen = Math.sqrt((mp1[0] - mp0[0]) * (mp1[0] - mp0[0]) + (mp1[1] - mp0[1]) * (mp1[1] - mp0[1]));
           if(meLen > longestEdgeLen){ longestEdgeLen = meLen; longestAngle = Math.atan2(f2m(mp1[0] - mp0[0]), f2m(mp1[1] - mp0[1])); }
         }
-        var mechW2 = Math.min(polyBW * 0.38, 4.0);
-        var mechD2 = Math.min(polyBD * 0.32, 3.0);
-        var mechH2 = 2.4;
+        var mechW2 = Math.min(mechRefW * 0.45, 8.0);
+        var mechD2 = Math.min(mechRefD * 0.40, 6.0);
+        var mechH2 = 2.8;
         if(mechW2 > 1.5 && mechD2 > 1.5){
           var mechY2 = totalH + 0.02;
           var mechGrp = new THREE.Group();
+          // Main enclosure
           mechGrp.add(mk(new THREE.BoxGeometry(mechW2, mechH2, mechD2), MAT.concreteDark, 0, mechH2 / 2, 0));
+          // Cap flashing
           mechGrp.add(mk(new THREE.BoxGeometry(mechW2 + 0.08, 0.05, mechD2 + 0.08), MAT.steelDark, 0, mechH2 + 0.025, 0));
-          var lCount2 = Math.floor(mechH2 / 0.3);
+          // Louvers on two faces
+          var lCount2 = Math.floor(mechH2 / 0.35);
           for(var li2 = 0; li2 < lCount2; li2++){
-            var ly2 = 0.25 + li2 * 0.3;
-            mechGrp.add(mk(new THREE.BoxGeometry(mechW2 * 0.6, 0.035, 0.05), MAT.steelDark, 0, ly2, -mechD2 / 2 - 0.025));
+            var ly2 = 0.3 + li2 * 0.35;
+            mechGrp.add(mk(new THREE.BoxGeometry(mechW2 * 0.7, 0.04, 0.05), MAT.steelDark, 0, ly2, -mechD2 / 2 - 0.025));
+            mechGrp.add(mk(new THREE.BoxGeometry(mechW2 * 0.7, 0.04, 0.05), MAT.steelDark, 0, ly2, mechD2 / 2 + 0.025));
           }
-          for(var ri2 = 0; ri2 < 2; ri2++){
-            var rW2 = 0.7 + Math.random() * 0.3, rD2 = 0.5 + Math.random() * 0.2, rH2 = 0.3 + Math.random() * 0.15;
-            mechGrp.add(mk(new THREE.BoxGeometry(rW2, rH2, rD2), MAT.steel, -0.6 + ri2 * 1.2, mechH2 + rH2 / 2 + 0.06, 0));
+          // Rooftop equipment (condensers, exhaust)
+          for(var ri2 = 0; ri2 < 3; ri2++){
+            var rW2 = 0.8 + Math.random() * 0.4, rD2 = 0.6 + Math.random() * 0.3, rH2 = 0.35 + Math.random() * 0.2;
+            mechGrp.add(mk(new THREE.BoxGeometry(rW2, rH2, rD2), MAT.steel, -1.2 + ri2 * 1.2, mechH2 + rH2 / 2 + 0.06, 0));
           }
-          mechGrp.position.set(towerPolyCX, mechY2, towerPolyCZ);
+          mechGrp.position.set(mechCX, mechY2, mechCZ);
           mechGrp.rotation.y = longestAngle;
           g.add(mechGrp);
         }
       }
 
-      // Ground outline
-      var outPts = pts.map(function(p){ return new THREE.Vector3(f2m(p[0]), 0.1, f2m(p[1])); });
-      g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(outPts),
-        new THREE.LineBasicMaterial({color:vol.color, linewidth:2})));
+      // Volume ground outline removed — lot boundary is shown by rebuildLot().
       // Restore parent group and add the volume sub-group.
       // CRITICAL: tag with _volIdx so click-to-drag (renderer.js mousedown) can
       // find this volume when the user clicks on it. Without this tag, getVolIdxFromMesh
@@ -1506,6 +2535,61 @@ function rebuildBuilding(){
     if(!hideW){ if(sfW) addGFStorefront(bd, cx0-0.02, 0, cz0+bd/2, Math.PI/2); else addGFBrick(bd, cx0-0.02, 0, cz0+bd/2, Math.PI/2); }
     if(!hideE){ if(sfE) addGFStorefront(bd, cx1+0.02, 0, cz0+bd/2, -Math.PI/2); else addGFBrick(bd, cx1+0.02, 0, cz0+bd/2, -Math.PI/2); }
 
+    // ── GROUND FLOOR ZONE MARKERS (lobby, loading, parking ramp) ──
+    // These are placed on non-retail faces to show functional ground-floor program
+    if(hasComm && vi === 0){
+      var lobbyW = f2m(12), lobbyH = storeyH * 0.85; // ~12ft wide lobby
+      var loadW = f2m(12), loadH = storeyH * 0.7;     // ~12ft wide loading bay
+      var rampOpenW = f2m(14), rampOpenH = storeyH * 0.65; // ~14ft ramp opening
+
+      // Place lobby on the south face (residential entry off side street), loading on east
+      // Lobby — glass double-door entrance with canopy
+      if(!hideS){
+        var lobbyGr = new THREE.Group();
+        // Glass doors
+        lobbyGr.add(mk(new THREE.PlaneGeometry(lobbyW, lobbyH), MAT.glassSF, 0, lobbyH / 2 + storeyH * 0.08, 0.01));
+        // Door frame
+        lobbyGr.add(mk(new THREE.BoxGeometry(lobbyW + 0.1, 0.06, 0.08), MAT.steelDark, 0, lobbyH + storeyH * 0.08, 0.01));
+        lobbyGr.add(mk(new THREE.BoxGeometry(0.06, lobbyH, 0.08), MAT.steelDark, -lobbyW / 2, lobbyH / 2 + storeyH * 0.08, 0.01));
+        lobbyGr.add(mk(new THREE.BoxGeometry(0.06, lobbyH, 0.08), MAT.steelDark, lobbyW / 2, lobbyH / 2 + storeyH * 0.08, 0.01));
+        // Canopy overhang
+        lobbyGr.add(mk(new THREE.BoxGeometry(lobbyW + f2m(4), 0.08, f2m(6)), MAT.concreteDark, 0, storeyH - 0.2, -f2m(3)));
+        lobbyGr.position.set(cx0 + bw * 0.3, 0, cz1 + 0.04);
+        lobbyGr.rotation.y = Math.PI;
+        g.add(lobbyGr);
+        addTextSprite(g, 'LOBBY', cx0 + bw * 0.3, storeyH * 0.4, cz1 + f2m(2), '#88ccff', 0.25);
+      }
+      // Loading bay — roll-up door on east face (or west if east is hidden)
+      var loadFace = hideE ? 'west' : 'east';
+      var loadX = loadFace === 'east' ? cx1 + 0.04 : cx0 - 0.04;
+      var loadRot = loadFace === 'east' ? -Math.PI / 2 : Math.PI / 2;
+      if(!(loadFace === 'east' ? hideE : hideW)){
+        var loadGr = new THREE.Group();
+        // Roll-up door (dark opening)
+        loadGr.add(mk(new THREE.PlaneGeometry(loadW, loadH), new THREE.MeshBasicMaterial({color:0x1a1a1a}), 0, loadH / 2 + 0.05, 0.01));
+        // Door frame
+        loadGr.add(mk(new THREE.BoxGeometry(loadW + 0.15, 0.08, 0.1), MAT.steelDark, 0, loadH + 0.09, 0.01));
+        loadGr.add(mk(new THREE.BoxGeometry(0.08, loadH + 0.08, 0.1), MAT.steelDark, -loadW / 2 - 0.04, loadH / 2 + 0.05, 0.01));
+        loadGr.add(mk(new THREE.BoxGeometry(0.08, loadH + 0.08, 0.1), MAT.steelDark, loadW / 2 + 0.04, loadH / 2 + 0.05, 0.01));
+        loadGr.position.set(loadX, 0, cz1 - f2m(8));
+        loadGr.rotation.y = loadRot;
+        g.add(loadGr);
+        addTextSprite(g, 'LOADING', loadX + (loadFace === 'east' ? f2m(2) : -f2m(2)), storeyH * 0.4, cz1 - f2m(8), '#ff9944', 0.22);
+      }
+      // Parking ramp opening — on east face near south end (or same face as loading but offset)
+      if(!(loadFace === 'east' ? hideE : hideW)){
+        var rampGr = new THREE.Group();
+        rampGr.add(mk(new THREE.PlaneGeometry(rampOpenW, rampOpenH), new THREE.MeshBasicMaterial({color:0x111111}), 0, rampOpenH / 2 + 0.05, 0.01));
+        rampGr.add(mk(new THREE.BoxGeometry(rampOpenW + 0.15, 0.08, 0.1), MAT.steelDark, 0, rampOpenH + 0.09, 0.01));
+        rampGr.add(mk(new THREE.BoxGeometry(0.08, rampOpenH + 0.08, 0.1), MAT.steelDark, -rampOpenW / 2 - 0.04, rampOpenH / 2 + 0.05, 0.01));
+        rampGr.add(mk(new THREE.BoxGeometry(0.08, rampOpenH + 0.08, 0.1), MAT.steelDark, rampOpenW / 2 + 0.04, rampOpenH / 2 + 0.05, 0.01));
+        rampGr.position.set(loadX, 0, cz0 + f2m(10));
+        rampGr.rotation.y = loadRot;
+        g.add(rampGr);
+        addTextSprite(g, 'P. RAMP', loadX + (loadFace === 'east' ? f2m(2) : -f2m(2)), storeyH * 0.4, cz0 + f2m(10), '#ff9944', 0.22);
+      }
+    }
+
     // ── UPPER FLOORS ──
     if(vol.storeys > 1){
       var upFloors = vol.storeys - 1;
@@ -1518,7 +2602,7 @@ function rebuildBuilding(){
       var towerH2 = towerFloors2 * upperH;
 
       // ── TOWER STEPBACK (so podium roof terrace is exposed) ──
-      var stepbackM = towerFloors2 > 0 ? f2m(vol.stepbackAmt || 5) : 0;
+      var stepbackM = towerFloors2 > 0 ? f2m(vol.stepbackAmt != null ? vol.stepbackAmt : 5) : 0;
       var tCx0 = cx0 + stepbackM, tCx1 = cx1 - stepbackM;
       var tCz0 = cz0 + stepbackM, tCz1 = cz1 - stepbackM;
       var tBw = bw - stepbackM * 2, tBd = bd - stepbackM * 2;
@@ -1632,17 +2716,52 @@ function rebuildBuilding(){
         if(!hideS) g.add(mk(new THREE.BoxGeometry(bw-0.2, 1.07, 0.02), MAT.glassRailing, cx0+bw/2, terraceY+1.07/2, cz1-0.01));
         if(!hideW) g.add(mk(new THREE.BoxGeometry(0.02, 1.07, bd-0.2), MAT.glassRailing, cx0+0.01, terraceY+1.07/2, cz0+bd/2));
         if(!hideE) g.add(mk(new THREE.BoxGeometry(0.02, 1.07, bd-0.2), MAT.glassRailing, cx1-0.01, terraceY+1.07/2, cz0+bd/2));
-        // Fix 9: Position debug output
-        console.log('=== POSITION DEBUG ===');
-        console.log('podiumTopY:', podiumTopY.toFixed(2));
-        console.log('capBeamTopY:', capBeamTopY.toFixed(2));
-        console.log('terraceY:', terraceY.toFixed(2));
-        console.log('first planter Y:', (firstPlanterY||0).toFixed(2));
-        console.log('first shrub Y:', (firstShrubY||0).toFixed(2));
-        console.log('towerBaseY:', (storeyH + podiumH2).toFixed(2));
-        console.log('tower footprint:', tBw.toFixed(2), 'x', tBd.toFixed(2));
-        console.log('podium footprint:', bw.toFixed(2), 'x', bd.toFixed(2));
-        console.log('front setback strip depth:', nStripD.toFixed(2));
+
+        // ── TERRACE AREA LABELS + OUTLINE ──
+        // Compute usable terrace area (total exposed podium roof minus tower footprint)
+        var terrTotalSF = 0;
+        if(nStripD > 0.3) terrTotalSF += m2f(bw - 0.3) * m2f(nStripD);
+        if(sStripD > 0.3) terrTotalSF += m2f(bw - 0.3) * m2f(sStripD);
+        if(wStripW > 0.3) terrTotalSF += m2f(wStripW) * m2f(bd - 0.3);
+        if(eStripW > 0.3) terrTotalSF += m2f(eStripW) * m2f(bd - 0.3);
+        terrTotalSF = Math.round(terrTotalSF);
+        if(terrTotalSF > 50){
+          // Dashed outline around entire terrace perimeter (at terrace Y, slightly above green roof)
+          var outlineY = terraceY + 0.35;
+          var olMat = new THREE.LineBasicMaterial({color:0xAEBC46, transparent:true, opacity:0.7});
+          var olPts = [
+            new THREE.Vector3(cx0 + 0.1, outlineY, cz0 + 0.1),
+            new THREE.Vector3(cx1 - 0.1, outlineY, cz0 + 0.1),
+            new THREE.Vector3(cx1 - 0.1, outlineY, cz1 - 0.1),
+            new THREE.Vector3(cx0 + 0.1, outlineY, cz1 - 0.1),
+            new THREE.Vector3(cx0 + 0.1, outlineY, cz0 + 0.1)
+          ];
+          g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(olPts), olMat));
+          // Tower footprint outline (inner cutout)
+          if(tBw > 0.5 && tBd > 0.5){
+            var ilPts = [
+              new THREE.Vector3(tCx0 + 0.1, outlineY, tCz0 + 0.1),
+              new THREE.Vector3(tCx1 - 0.1, outlineY, tCz0 + 0.1),
+              new THREE.Vector3(tCx1 - 0.1, outlineY, tCz1 - 0.1),
+              new THREE.Vector3(tCx0 + 0.1, outlineY, tCz1 - 0.1),
+              new THREE.Vector3(tCx0 + 0.1, outlineY, tCz0 + 0.1)
+            ];
+            g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ilPts), olMat));
+          }
+          // Area label on the largest strip (usually north/front)
+          var labelZ2 = cz0 + (nStripD > sStripD ? nStripD / 2 : bd - sStripD / 2);
+          addTextSprite(g, 'AMENITY TERRACE', cx0 + bw / 2, outlineY + 0.3, labelZ2, '#AEBC46', 0.35);
+          addTextSprite(g, terrTotalSF.toLocaleString() + ' sf', cx0 + bw / 2, outlineY - 0.1, labelZ2, '#ffffff', 0.28);
+          // Per-strip dimension labels on smaller strips
+          if(wStripW > 0.5){
+            var wSF = Math.round(m2f(wStripW) * m2f(bd - 0.3));
+            addTextSprite(g, wSF + ' sf', cx0 + wStripW / 2, outlineY + 0.2, cz0 + bd / 2, '#aaaaaa', 0.2);
+          }
+          if(eStripW > 0.5){
+            var eSF = Math.round(m2f(eStripW) * m2f(bd - 0.3));
+            addTextSprite(g, eSF + ' sf', cx1 - eStripW / 2, outlineY + 0.2, cz0 + bd / 2, '#aaaaaa', 0.2);
+          }
+        }
       }
 
       // ── TOWER (curtain wall) ──
@@ -1653,10 +2772,10 @@ function rebuildBuilding(){
         g.add(mk(new THREE.BoxGeometry(tBw-0.04, towerH2, tBd-0.04), twrCoreMat2, tCenterX, towerBaseY2+towerH2/2, tCenterZ));
         // Curtain wall faces (stepped-back, slightly narrower than tower for corner clearance)
         if(showWin){
-          if(!hideN) addCurtainWall(g, tCenterX, towerBaseY2, tCz0-0.02, tBw-0.3, towerFloors2, upperH, 0, {bayWidth:3.0});
-          if(!hideS) addCurtainWall(g, tCenterX, towerBaseY2, tCz1+0.02, tBw-0.3, towerFloors2, upperH, Math.PI, {bayWidth:3.0});
-          if(!hideW) addCurtainWall(g, tCx0-0.02, towerBaseY2, tCenterZ, tBd-0.3, towerFloors2, upperH, Math.PI/2, {bayWidth:3.0});
-          if(!hideE) addCurtainWall(g, tCx1+0.02, towerBaseY2, tCenterZ, tBd-0.3, towerFloors2, upperH, -Math.PI/2, {bayWidth:3.0});
+          if(!hideN) addCurtainWall(g, tCenterX, towerBaseY2, tCz0-0.02, tBw-0.3, towerFloors2, upperH, 0, {bayWidth:3.0, backDepthM:0});
+          if(!hideS) addCurtainWall(g, tCenterX, towerBaseY2, tCz1+0.02, tBw-0.3, towerFloors2, upperH, Math.PI, {bayWidth:3.0, backDepthM:0});
+          if(!hideW) addCurtainWall(g, tCx0-0.02, towerBaseY2, tCenterZ, tBd-0.3, towerFloors2, upperH, Math.PI/2, {bayWidth:3.0, backDepthM:0});
+          if(!hideE) addCurtainWall(g, tCx1+0.02, towerBaseY2, tCenterZ, tBd-0.3, towerFloors2, upperH, -Math.PI/2, {bayWidth:3.0, backDepthM:0});
         }
       }
 
@@ -1771,6 +2890,7 @@ function rebuildBuilding(){
     volGrp._volIdx = vi;
     g.add(volGrp);
   });
+
 }
 
 function addTextSprite(group, text, x, y, z, color, scale){
@@ -2211,6 +3331,7 @@ function makeRow(parent, label, obj, key, min, max, step, unit){
   slider.oninput=()=>{
     var _v = parseFloat(slider.value);
     if(!isFinite(_v)) _v = min;  // NaN guard
+    _v = Math.max(min, Math.min(max, _v)); // clamp to valid range
     obj[key]=_v;
     valInput.value=slider.value;
     rebuildAll();
@@ -2581,135 +3702,51 @@ function buildVolPanel(){
       buildVolPanel();rebuildAll();
     };
     actRow.appendChild(snapBtn);
+
+    /* "Match Lot" button — copies the lot polygon DIRECTLY into customPolyLocal.
+       IMPORTANT: customPolyLocal is interpreted as ABSOLUTE world-feet coords
+       (see rebuildBuilding: `polyM = vol.customPolyLocal.map(p => [f2m(p[0]), f2m(p[1])])`),
+       NOT volume-local — so we must NOT subtract lot bounds when copying. The
+       volume's offEast / startEg / width / depth become irrelevant when a polygon
+       is set, but we keep them consistent with the lot bounding box for any
+       parametric fallback paths. */
+    const matchBtn=document.createElement('button');
+    matchBtn.className='btn-add';
+    matchBtn.style.cssText='flex:1;padding:4px;font-size:9px;background:#3a4a3a;color:#AEBC46;border:1px solid #5a7a5a';
+    matchBtn.textContent='🎯 Match Lot';
+    matchBtn.title='Reshape this volume to follow the drawn lot polygon';
+    matchBtn.onclick=()=>{
+      const vts=lotVerts();
+      if(!vts || vts.length < 3){ alert('No lot polygon — draw one on the Site Map first.'); return; }
+      const lb=lotBounds();
+      /* Direct copy of lot vertices — polygon is in world-feet coords. */
+      vol.customPolyLocal = vts.map(function(v){ return [v[0], v[1]]; });
+      /* Ensure polygon is closed (first vertex repeated at end). */
+      var first = vol.customPolyLocal[0], last = vol.customPolyLocal[vol.customPolyLocal.length-1];
+      if(first[0] !== last[0] || first[1] !== last[1]) vol.customPolyLocal.push([first[0], first[1]]);
+      /* Reset parametric values so they don't conflict if a downstream code path
+         falls back to them. With a polygon set, the renderer uses the polygon
+         as-is in world coords — startEg / offEast / width / depth become unused
+         for placement but kept consistent for UI display. */
+      vol.width = Math.round(lb.width);
+      vol.depth = Math.round(lb.depth);
+      vol.offEast = 0;
+      vol.startEg = Math.round(lb.minZ);
+      /* Diagnostic so we can see exactly what got set + verify alignment. */
+      console.log('[Match Lot] Volume', vol.name, 'now uses polygon:',
+        JSON.stringify(vol.customPolyLocal.map(function(p){return [Math.round(p[0]),Math.round(p[1])];})));
+      console.log('[Match Lot] Lot bounds: minX=' + Math.round(lb.minX) + ', minZ=' + Math.round(lb.minZ) +
+                  ', maxX=' + Math.round(lb.maxX) + ', maxZ=' + Math.round(lb.maxZ));
+      buildVolPanel();
+      rebuildAll();
+    };
+    actRow.appendChild(matchBtn);
     bd.appendChild(actRow);
-
-    // ── FACADE CUSTOMIZATION ──
-    {
-    const facSec=document.createElement('div');
-    facSec.style.cssText='margin-top:8px;padding-top:8px;border-top:1px solid #333333';
-    const facTitle=document.createElement('div');
-    facTitle.style.cssText='font-size:10px;font-weight:700;color:#AEBC46;margin-bottom:4px;letter-spacing:1px';
-    facTitle.textContent='FACADE';
-    facSec.appendChild(facTitle);
-
-    // Cladding material dropdown
-    if(vol.cladding===undefined) vol.cladding=(vol.storeys<=4?'brick':'brick');
-    const cladRow=document.createElement('div');cladRow.className='row';
-    const cladLbl=document.createElement('label');cladLbl.textContent='Cladding';
-    const cladSel=document.createElement('select');
-    cladSel.style.cssText='background:#1a1a1a;border:1px solid #444;color:#AEBC46;padding:3px 6px;border-radius:3px;font-size:11px;flex:1';
-    [{v:'brick',t:'Brick'},{v:'cedar',t:'Cedar Slat'},{v:'metal',t:'Metal Panel'},{v:'precast',t:'Precast Concrete'},{v:'stone',t:'Stone'}].forEach(function(o){
-      var opt=document.createElement('option');opt.value=o.v;opt.textContent=o.t;
-      if(vol.cladding===o.v) opt.selected=true;
-      cladSel.appendChild(opt);
-    });
-    cladSel.onchange=function(){vol.cladding=cladSel.value;rebuildAll()};
-    cladRow.appendChild(cladLbl);cladRow.appendChild(cladSel);
-    facSec.appendChild(cladRow);
-
-    // Frontages (per-face storefront toggles)
-    const sfTitle=document.createElement('div');
-    sfTitle.style.cssText='font-size:9px;font-weight:600;color:#aaa;margin:6px 0 3px;letter-spacing:0.5px';
-    sfTitle.textContent='GROUND FLOOR FRONTAGES';
-    facSec.appendChild(sfTitle);
-    if(vol.storefrontN===undefined) vol.storefrontN=1;
-    if(vol.storefrontS===undefined) vol.storefrontS=0;
-    if(vol.storefrontE===undefined) vol.storefrontE=0;
-    if(vol.storefrontW===undefined) vol.storefrontW=0;
-    const sfGrid=document.createElement('div');
-    sfGrid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin:2px 0 6px';
-    [{key:'storefrontN',label:'North'},{key:'storefrontS',label:'South'},{key:'storefrontE',label:'East'},{key:'storefrontW',label:'West'}].forEach(function(s){
-      var sRow=document.createElement('div');
-      sRow.style.cssText='display:flex;align-items:center;gap:5px';
-      var cb=document.createElement('input');cb.type='checkbox';
-      cb.checked=!!vol[s.key];
-      cb.style.cssText='accent-color:#AEBC46;width:14px;height:14px;cursor:pointer';
-      cb.onchange=function(){vol[s.key]=cb.checked?1:0;rebuildAll()};
-      var lb2=document.createElement('span');
-      lb2.style.cssText='font-size:11px;color:#aaa';
-      lb2.textContent='Storefront '+s.label;
-      sRow.appendChild(cb);sRow.appendChild(lb2);
-      sfGrid.appendChild(sRow);
-    });
-    facSec.appendChild(sfGrid);
-    // Ensure defaults exist (for older saved projects)
-    if(vol.windows===undefined) vol.windows=1;
-    if(vol.winSpacing===undefined) vol.winSpacing=3;
-    if(vol.balconies===undefined) vol.balconies=1;
-    if(vol.balcEvery===undefined) vol.balcEvery=2;
-    if(vol.balcDepth===undefined) vol.balcDepth=4;
-    // Init per-side balcony flags (default: N+S on if master on, E+W off)
-    if(vol.balcN===undefined) vol.balcN=vol.balconies?1:0;
-    if(vol.balcS===undefined) vol.balcS=vol.balconies?1:0;
-    if(vol.balcE===undefined) vol.balcE=0;
-    if(vol.balcW===undefined) vol.balcW=0;
-    // Windows toggle
-    const winRow=document.createElement('div');winRow.className='row';
-    const winLbl=document.createElement('label');winLbl.textContent='Windows';
-    const winCb=document.createElement('input');winCb.type='checkbox';
-    winCb.checked=!!vol.windows;
-    winCb.style.cssText='accent-color:#AEBC46;width:16px;height:16px;cursor:pointer';
-    winCb.onchange=()=>{vol.windows=winCb.checked?1:0;rebuildAll()};
-    winRow.appendChild(winLbl);winRow.appendChild(winCb);
-    facSec.appendChild(winRow);
-    if(vol.windows) makeRow(facSec,'Win. Spacing',vol,'winSpacing',1,8,0.5,'m');
-
-    // Balcony settings
-    makeRow(facSec,'Balc. Every N Floors',vol,'balcEvery',1,5,1,'fl');
-    makeRow(facSec,'Balc. Depth',vol,'balcDepth',2,8,0.5,'ft');
-
-    // Per-side balcony toggles in a compact grid
-    const balGrid=document.createElement('div');
-    balGrid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0';
-    const sides=[
-      {key:'balcN',label:'North'},
-      {key:'balcS',label:'South'},
-      {key:'balcE',label:'East'},
-      {key:'balcW',label:'West'}
-    ];
-    sides.forEach(s=>{
-      const sRow=document.createElement('div');
-      sRow.style.cssText='display:flex;align-items:center;gap:5px';
-      const cb=document.createElement('input');cb.type='checkbox';
-      cb.checked=!!vol[s.key];
-      cb.style.cssText='accent-color:#AEBC46;width:14px;height:14px;cursor:pointer';
-      cb.onchange=()=>{vol[s.key]=cb.checked?1:0;rebuildAll()};
-      const lb=document.createElement('span');
-      lb.style.cssText='font-size:11px;color:#aaa';
-      lb.textContent=`Balc. ${s.label}`;
-      sRow.appendChild(cb);sRow.appendChild(lb);
-      balGrid.appendChild(sRow);
-    });
-    facSec.appendChild(balGrid);
-
-    // All-on / All-off quick buttons
-    const balBtns=document.createElement('div');
-    balBtns.style.cssText='display:flex;gap:4px;margin:2px 0 4px';
-    const allOnBtn=document.createElement('button');
-    allOnBtn.className='btn-add';allOnBtn.style.cssText='flex:1;padding:2px 4px;font-size:9px;background:#444444;color:#AEBC46';
-    allOnBtn.textContent='All Sides On';
-    allOnBtn.onclick=()=>{vol.balcN=vol.balcS=vol.balcE=vol.balcW=1;buildVolPanel();rebuildAll()};
-    const allOffBtn=document.createElement('button');
-    allOffBtn.className='btn-add';allOffBtn.style.cssText='flex:1;padding:2px 4px;font-size:9px;background:#444444;color:#ff6644';
-    allOffBtn.textContent='All Sides Off';
-    allOffBtn.onclick=()=>{vol.balcN=vol.balcS=vol.balcE=vol.balcW=0;buildVolPanel();rebuildAll()};
-    balBtns.appendChild(allOnBtn);balBtns.appendChild(allOffBtn);
-    facSec.appendChild(balBtns);
-    bd.appendChild(facSec);
-    } // end facade section
-
-    // Live-updating info div (refreshed by updateVolInfo on every change)
-    const info=document.createElement('div');
-    info.id='vol-info-'+i;
-    info.style.cssText='font-size:11px;color:#888;margin-top:6px;padding-top:6px;border-top:1px solid #333333';
-    bd.appendChild(info);
-
-    card.appendChild(bd);
-    list.appendChild(card);
   });
 }
 
-// ── Live-update per-volume info (overlap, floor plate, height) ──
+/* ===== Restored from git baseline (truncation recovery) ===== */
+
 function updateVolInfo(){
   const vts=lotVerts();
   const allX=vts.map(v=>v[0]);
@@ -3092,6 +4129,48 @@ function derivedRearFrontage(){
 
 function updateInfoBar(){
   document.getElementById('info-bar').textContent=
-    `LOT — ${P.lot.front}' × ${P.lot.rear}' — ${lotArea().toLocaleString(undefined,{maximumFractionDigits:0})} SF`;
+    `LOT - ${P.lot.front}' x ${P.lot.rear}' - ${lotArea().toLocaleString(undefined,{maximumFractionDigits:0})} SF`;
 }
 
+// ═══════════════════════════════════════════════════════════
+//  INDUSTRIAL SURFACE ZONES
+//  Renders P.industrialSurfaces (truck court, car parking, etc.) as flat
+//  coloured polygons on the ground plane. Populated by _omGenerateIndustrial.
+//  Each surface entry: { type, label, coords:[[x,z],...], color, opacity }
+//  Coords are in feet (X+ = East, Z+ = South). Rendered at y=0.05 so they sit
+//  just above the satellite ground texture without z-fighting.
+// ═══════════════════════════════════════════════════════════
+function rebuildIndustrialSurfaces(){
+  clearGroup('industrial_surfaces');
+  if(typeof P === 'undefined' || !P || !Array.isArray(P.industrialSurfaces)) return;
+  if(P.industrialSurfaces.length === 0) return;
+  var g = groups.industrial_surfaces;
+
+  P.industrialSurfaces.forEach(function(surf){
+    if(!surf || !Array.isArray(surf.coords) || surf.coords.length < 4) return;
+    // Build 2D shape in (X, -Z) — see comments in rebuildContextBuildings
+    // for why the Z-axis is negated (group rotation.x = -Math.PI/2 maps
+    // shape's +Y to world's -Z).
+    var pts = [];
+    for(var i = 0; i < surf.coords.length - 1; i++){
+      pts.push(new THREE.Vector2(f2m(surf.coords[i][0]), -f2m(surf.coords[i][1])));
+    }
+    if(pts.length < 3) return;
+    var shape = new THREE.Shape(pts);
+    var geo = new THREE.ShapeGeometry(shape);
+    var mat = new THREE.MeshBasicMaterial({
+      color: (typeof surf.color === 'number') ? surf.color : 0x444444,
+      transparent: true,
+      opacity: (typeof surf.opacity === 'number') ? surf.opacity : 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = (typeof surf._renderY === 'number') ? surf._renderY : 0.05;          // honour _renderY hint (used by industrial landscape)
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.userData.surfaceType = surf.type || 'unknown';
+    g.add(mesh);
+  });
+}

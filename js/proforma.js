@@ -4,8 +4,8 @@
 // ═══════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════
-// ALTUS 2025 CANADIAN COST GUIDE — City-Specific Construction Costs
-// Source: Altus Group, 2025 Canadian Cost Guide ($/sf, hard cost only)
+// ALTUS 2026 CANADIAN COST GUIDE — City-Specific Construction Costs
+// Source: Altus Group, 2026 Canadian Cost Guide ($/sf, hard cost only)
 // All values CAD $/sf, exclude parking below grade, exclude GST/HST/QST
 // ══════════════════════════════════════════════════════════════════════
 const ALTUS_CITIES = [
@@ -25,37 +25,114 @@ const ALTUS_CITIES = [
 //       low60, high60 = 40-60 storeys; low60p, high60p = 60+ storeys;
 //       hiQualPremium = premium for high-quality finishes (additive)
 const ALTUS_RESI_COSTS = {
-  vancouver: {low12:330,high12:405, low39:360,high39:455, low60:360,high60:480, low60p:370,high60p:485, hiQualPremium:275},
-  calgary:   {low12:295,high12:350, low39:305,high39:360, low60:310,high60:365, low60p:null,high60p:null, hiQualPremium:265},
-  edmonton:  {low12:295,high12:350, low39:305,high39:360, low60:310,high60:365, low60p:null,high60p:null, hiQualPremium:265},
-  winnipeg:  {low12:295,high12:350, low39:305,high39:355, low60:310,high60:360, low60p:null,high60p:null, hiQualPremium:260},
-  gta:       {low12:290,high12:390, low39:295,high39:385, low60:330,high60:410, low60p:365,high60p:480, hiQualPremium:245},
-  ottawa:    {low12:270,high12:345, low39:310,high39:340, low60:315,high60:365, low60p:null,high60p:null, hiQualPremium:195},
-  montreal:  {low12:260,high12:320, low39:300,high39:315, low60:310,high60:355, low60p:null,high60p:null, hiQualPremium:200},
-  halifax:   {low12:240,high12:340, low39:295,high39:370, low60:null,high60:null, low60p:null,high60p:null, hiQualPremium:195},
-  stjohns:   {low12:250,high12:350, low39:null,high39:null, low60:null,high60:null, low60p:null,high60p:null, hiQualPremium:200},
+  vancouver: {low12:330,high12:400, low39:340,high39:435, low60:350,high60:465, low60p:370,high60p:480, hiQualPremium:285},
+  calgary:   {low12:305,high12:375, low39:315,high39:385, low60:325,high60:395, low60p:null,high60p:null, hiQualPremium:275},
+  edmonton:  {low12:305,high12:375, low39:315,high39:385, low60:325,high60:395, low60p:null,high60p:null, hiQualPremium:275},
+  winnipeg:  {low12:305,high12:375, low39:315,high39:380, low60:325,high60:390, low60p:null,high60p:null, hiQualPremium:270},
+  gta:       {low12:245,high12:390, low39:280,high39:350, low60:320,high60:410, low60p:350,high60p:480, hiQualPremium:245},
+  ottawa:    {low12:260,high12:320, low39:300,high39:330, low60:310,high60:360, low60p:null,high60p:null, hiQualPremium:200},
+  montreal:  {low12:275,high12:335, low39:320,high39:330, low60:330,high60:375, low60p:null,high60p:null, hiQualPremium:200},
+  halifax:   {low12:250,high12:345, low39:305,high39:375, low60:null,high60:null, low60p:null,high60p:null, hiQualPremium:200},
+  stjohns:   {low12:260,high12:360, low39:null,high39:null, low60:null,high60:null, low60p:null,high60p:null, hiQualPremium:200},
 };
 
 // Wood-framed residential — $/sf ranges by city (Up to 6 storey wood-framed condo)
 const ALTUS_WOOD_FRAME = {
-  vancouver:{low:275,high:365}, calgary:{low:235,high:345}, edmonton:{low:230,high:345},
-  winnipeg:{low:225,high:340}, gta:{low:245,high:330}, ottawa:{low:215,high:280},
-  montreal:{low:210,high:275}, halifax:{low:175,high:220}, stjohns:{low:240,high:310},
+  vancouver:{low:255,high:360}, calgary:{low:245,high:365}, edmonton:{low:240,high:365},
+  winnipeg:{low:235,high:360}, gta:{low:210,high:330}, ottawa:{low:230,high:290},
+  montreal:{low:225,high:290}, halifax:{low:205,high:255}, stjohns:{low:240,high:310},
 };
 
 // Underground parking — $/sf by city
 const ALTUS_PARKING = {
-  vancouver:{low:170,high:290}, calgary:{low:160,high:220}, edmonton:{low:160,high:220},
-  winnipeg:{low:155,high:215}, gta:{low:175,high:285}, ottawa:{low:200,high:290},
-  montreal:{low:145,high:195}, halifax:{low:145,high:200}, stjohns:{low:150,high:200},
+  vancouver:{low:195,high:300}, calgary:{low:165,high:230}, edmonton:{low:165,high:230},
+  winnipeg:{low:160,high:225}, gta:{low:165,high:285}, ottawa:{low:200,high:280},
+  montreal:{low:155,high:205}, halifax:{low:150,high:205}, stjohns:{low:155,high:220},
 };
 
 // Retail — $/sf by city (Strip Plaza as proxy for ground-floor retail)
 const ALTUS_RETAIL = {
-  vancouver:{low:210,high:300}, calgary:{low:220,high:300}, edmonton:{low:220,high:300},
-  winnipeg:{low:215,high:295}, gta:{low:235,high:295}, ottawa:{low:170,high:245},
-  montreal:{low:155,high:225}, halifax:{low:140,high:190}, stjohns:{low:145,high:190},
+  vancouver:{low:210,high:300}, calgary:{low:225,high:315}, edmonton:{low:225,high:315},
+  winnipeg:{low:220,high:310}, gta:{low:220,high:295}, ottawa:{low:170,high:240},
+  montreal:{low:165,high:235}, halifax:{low:145,high:195}, stjohns:{low:150,high:200},
 };
+
+// ══════════════════════════════════════════════════════════════════════
+// INDUSTRIAL FACILITIES — $/sf by city and building type
+// Source: Altus Group, 2026 Canadian Cost Guide (Private Sector)
+// Prepared for future industrial development massing/proforma features
+// ══════════════════════════════════════════════════════════════════════
+const ALTUS_INDUSTRIAL = {
+  warehouse: {
+    vancouver:{low:120,high:200}, calgary:{low:130,high:175}, edmonton:{low:130,high:175},
+    winnipeg:{low:125,high:170}, gta:{low:75,high:180}, ottawa:{low:120,high:170},
+    montreal:{low:120,high:185}, halifax:{low:125,high:195}, stjohns:{low:115,high:180},
+  },
+  distribution: {
+    vancouver:{low:200,high:485}, calgary:{low:155,high:475}, edmonton:{low:155,high:475},
+    winnipeg:{low:150,high:470}, gta:{low:170,high:480}, ottawa:{low:165,high:445},
+    montreal:{low:170,high:460}, halifax:{low:165,high:430}, stjohns:{low:185,high:480},
+  },
+  urbanStorage: {
+    vancouver:{low:120,high:175}, calgary:{low:145,high:195}, edmonton:{low:145,high:195},
+    winnipeg:{low:140,high:190}, gta:{low:90,high:195}, ottawa:{low:105,high:195},
+    montreal:{low:null,high:null}, halifax:{low:null,high:null}, stjohns:{low:null,high:null},
+  },
+};
+
+// Industrial servicing costs — per acre by city (site servicing for industrial land)
+// Source: Altus Group, 2026 Canadian Cost Guide (Infrastructure — Servicing)
+const ALTUS_INDUSTRIAL_SERVICING = {
+  vancouver:{low:136600,high:250000}, calgary:{low:145000,high:241500}, edmonton:{low:145000,high:241500},
+  winnipeg:{low:145000,high:241500}, gta:{low:165000,high:252300}, ottawa:{low:150000,high:233000},
+  montreal:{low:154000,high:235000}, halifax:{low:130000,high:205000}, stjohns:{low:155000,high:225000},
+};
+
+/**
+ * Get Altus industrial cost range for a given city and building subtype.
+ * Returns {low, high, subtype, source} — the appropriate $/sf range.
+ * Falls back to GTA if the city doesn't have data for that subtype.
+ * @param {string} cityId - Altus city id (e.g. 'gta', 'vancouver')
+ * @param {string} subtype - 'warehouse' | 'distribution' | 'urbanStorage'
+ * @returns {{low:number|null, high:number|null, subtype:string, subtypeLabel:string, source:string}}
+ */
+function getAltusIndustrialCostRange(cityId, subtype) {
+  const labels = {
+    warehouse: 'Warehouse',
+    distribution: 'Distribution Facility',
+    urbanStorage: 'Urban Storage Facility'
+  };
+  const sub = subtype || 'warehouse';
+  const table = ALTUS_INDUSTRIAL[sub] || ALTUS_INDUSTRIAL.warehouse;
+  const city = ALTUS_CITIES.find(function(x){return x.id===cityId}) || ALTUS_CITIES.find(function(x){return x.id==='gta'});
+  var costs = table[cityId] || table.gta;
+  // Fall back to GTA if this city has null data for the subtype
+  if (costs.low == null || costs.high == null) {
+    costs = table.gta || {low:null, high:null};
+  }
+  return {
+    low: costs.low,
+    high: costs.high,
+    subtype: sub,
+    subtypeLabel: labels[sub] || sub,
+    source: 'Altus 2026 — ' + city.label
+  };
+}
+
+/**
+ * Get Altus industrial servicing cost range (per acre) for a given city.
+ * @param {string} cityId - Altus city id
+ * @returns {{low:number, high:number, source:string}}
+ */
+function getAltusIndustrialServicing(cityId) {
+  var city = ALTUS_CITIES.find(function(x){return x.id===cityId}) || ALTUS_CITIES.find(function(x){return x.id==='gta'});
+  var costs = ALTUS_INDUSTRIAL_SERVICING[cityId] || ALTUS_INDUSTRIAL_SERVICING.gta;
+  return {
+    low: costs.low,
+    high: costs.high,
+    source: 'Altus 2026 — ' + city.label
+  };
+}
 
 /**
  * Find the nearest Altus Cost Guide city for given GPS coordinates.
@@ -92,7 +169,7 @@ function getAltusCityForCoords(lat, lng) {
 function getAltusCostRange(cityId, storeys) {
   const c = ALTUS_RESI_COSTS[cityId] || ALTUS_RESI_COSTS.gta;
   const city = ALTUS_CITIES.find(x => x.id === cityId) || ALTUS_CITIES.find(x => x.id === 'gta');
-  const src = 'Altus 2025 — ' + city.label;
+  const src = 'Altus 2026 — ' + city.label;
 
   // Wood-frame (1-6 storeys)
   if (storeys <= 6) {
@@ -174,6 +251,10 @@ if(!P.pf) P.pf={
   ],
   parkPrice:60000, lockerPrice:8000, parkRatio:0.30, lockerRatio:0.56,
   landPrice:10000000, lttRate:0.025, ddCost:350000,
+  // Building efficiency = sellable residential / gross residential.
+  // Range 0.60–0.85. Capped at 0.85 because 15% is structural overhead
+  // (corridors, elevators, lobbies, stairwells) that can't be eliminated.
+  efficiency:0.80,
   hc:{shoring:18,structure:68,envelope:85,mech:38,elec:22,fitResi:55,fitComm:12,commShell:8,elevators:6,siteWorks:5,parking:28,groceryTI:4.5},
   sc:{ae:0.065,pm:0.03,legal:0.015,insurance:0.012,marketing:0.04,permits:0.008,contingency:0.105},
   totalSoftPct:0.275,  // master soft cost % of hard (sum of sc defaults)
@@ -205,6 +286,8 @@ if(!P.pf) P.pf={
     absorptionMonths:18,    // months to sell remaining 30% post-occupancy
     constructionRate:0.065, // construction financing rate (prime + 150-250bps)
     equityPct:0.35,         // 35% equity (1 - LTC)
+    preDevCarryRate:0.03,   // 3% annual carrying on land during pre-development
+    postCompCarryRate:0.005 // 0.5% annual carrying during post-completion absorption
   }
 };
 
@@ -246,7 +329,7 @@ function benchCheck(val, benchKey){
     above: b.label+' is above the typical '+mktLabel+' market range. High end: '+fmtBV(b.high)
   };
   const icons={in:'✓',below:'▼',above:'▲'};
-  const dot=`<span style="display:inline-block;width:14px;text-align:center;vertical-align:middle"><span title="${tips[status]}" style="font-size:9px;color:${colors[status]};cursor:default;font-weight:700;line-height:1">${icons[status]}</span></span>`;
+  const dot=`<span style="display:inline-block;width:14px;text-align:center;vertical-align:middle"><span title="${tips[status]}" style="font-size:12px;color:${colors[status]};cursor:default;font-weight:700;line-height:1">${icons[status]}</span></span>`;
   return {status,dot,val,low:b.low,high:b.high,label:b.label};
 }
 
@@ -306,12 +389,12 @@ function renderBenchmarkBanner(bm){
     <!-- Header row: title + score -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
-        <div style="font-size:10px;font-weight:700;color:#c49ade;letter-spacing:1px">MARKET BENCHMARK VALIDATION</div>
-        <div style="font-size:9px;color:#777;margin-top:2px">Benchmarked against Altus 2025 Canadian Cost Guide</div>
+        <div style="font-size:13px;font-weight:700;color:#c49ade;letter-spacing:1px">MARKET BENCHMARK VALIDATION</div>
+        <div style="font-size:12px;color:#777;margin-top:2px">Benchmarked against Altus 2026 Canadian Cost Guide</div>
       </div>
       <div style="text-align:right">
         <div style="font-size:18px;font-weight:700;color:${barColor}">${pctIn}%</div>
-        <div style="font-size:9px;color:#888">${bm.inCount}/${bm.totalCount} in range</div>
+        <div style="font-size:12px;color:#888">${bm.inCount}/${bm.totalCount} in range</div>
       </div>
     </div>
 
@@ -322,9 +405,9 @@ function renderBenchmarkBanner(bm){
 
     <!-- Legend -->
     <div style="display:flex;gap:16px;margin-bottom:10px;padding:6px 8px;background:#222;border-radius:4px">
-      <span style="font-size:9px;color:#4ecdc4;font-weight:600">● Within Range <span style="color:#666">(${bm.inCount})</span></span>
-      <span style="font-size:9px;color:#e8c87a;font-weight:600">● Below Range <span style="color:#666">(${belowCount})</span></span>
-      <span style="font-size:9px;color:#c44;font-weight:600">● Above Range <span style="color:#666">(${aboveCount})</span></span>
+      <span style="font-size:12px;color:#4ecdc4;font-weight:600">● Within Range <span style="color:#666">(${bm.inCount})</span></span>
+      <span style="font-size:12px;color:#e8c87a;font-weight:600">● Below Range <span style="color:#666">(${belowCount})</span></span>
+      <span style="font-size:12px;color:#c44;font-weight:600">● Above Range <span style="color:#666">(${aboveCount})</span></span>
     </div>
 
     <!-- Per-metric cards -->
@@ -341,11 +424,11 @@ function renderBenchmarkBanner(bm){
 
     html+=`<div style="background:${bgColors[c.status]};border:1px solid ${borderColors[c.status]};border-radius:4px;padding:6px 8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
-        <span style="font-size:9px;color:#aaa;font-weight:600">${c.label}</span>
-        <span style="font-size:8px;font-weight:700;color:${col};background:${bgColors[c.status]};padding:1px 5px;border-radius:3px;border:1px solid ${col}33">${statusLabels[c.status]}</span>
+        <span style="font-size:12px;color:#aaa;font-weight:600">${c.label}</span>
+        <span style="font-size:11px;font-weight:700;color:${col};background:${bgColors[c.status]};padding:1px 5px;border-radius:3px;border:1px solid ${col}33">${statusLabels[c.status]}</span>
       </div>
       <div style="font-size:12px;font-weight:700;color:${col}">${actualStr}</div>
-      <div style="font-size:8px;color:#666;margin-top:1px">Range: ${rangeStr}</div>
+      <div style="font-size:11px;color:#666;margin-top:1px">Range: ${rangeStr}</div>
     </div>`;
   });
 
@@ -394,9 +477,9 @@ let _ganttCleanup=null;
 
 // ══════════════════════════════════════════════════════════════════════
 // CONSTRUCTION SCHEDULING ENGINE — Residential Developments (Ontario)
-// Typology-aware, Altus 2025 Canadian Cost Guide-aligned.
+// Typology-aware, Altus 2026 Canadian Cost Guide-aligned.
 // Sources: Planning Planet, Canadian Consulting Engineer (Yolles, Toronto),
-//          Altus 2025 Canadian Cost Guide, Toronto shoring contractor benchmarks.
+//          Altus 2026 Canadian Cost Guide, Toronto shoring contractor benchmarks.
 // ══════════════════════════════════════════════════════════════════════
 
 // Seasonal factors for shoring/excavation (start_month → multiplier)
@@ -410,7 +493,7 @@ const CYCLE_RATES={wood_frame:3.0, concrete_flat_slab:5.0, concrete_slab_beam:7.
 // Legacy slab type mapping
 const SLAB_TO_CONSTRUCTION={flat:'concrete_flat_slab', beam:'concrete_slab_beam', wood:'wood_frame'};
 
-// Typology thresholds (aligned to Altus 2025 storey bands)
+// Typology thresholds (aligned to Altus 2026 storey bands)
 const TYPOLOGY_RANGES={
   LOW_RISE_WOOD:{min:1,max:6},
   MID_RISE:{min:7,max:12},
@@ -462,7 +545,7 @@ function detectConstructionType(typology){
 
 /**
  * Compute empirically-derived construction phase durations.
- * Full scheduling engine aligned with Altus 2025 typology bands.
+ * Full scheduling engine aligned with Altus 2026 typology bands.
  *
  * @param {Object} params
  * @param {number} params.floorsAbove       — Total storeys above grade (N_above)
@@ -619,7 +702,7 @@ function calcConstructionSchedule(params){
   const T_total_with_contingency=T_critical_path_months*(1+contingency);
 
   // ══════════════════════════════════════════════════════════════════
-  // COST ESTIMATE (Altus 2025, city-aware)
+  // COST ESTIMATE (Altus 2026, city-aware)
   // ══════════════════════════════════════════════════════════════════
   let costEstimate=null;
   if(GFA_sqft>0){
@@ -636,7 +719,7 @@ function calcConstructionSchedule(params){
       below_grade_low:belowLow, below_grade_high:belowHigh,
       total_low:aboveLow+belowLow, total_high:aboveHigh+belowHigh,
       city:city.label, costRange:costRange,
-      note:'Hard costs only (Altus 2025 — '+city.label+'). Excludes soft costs, land, HST, permits, DCs.'
+      note:'Hard costs only (Altus 2026 — '+city.label+'). Excludes soft costs, land, HST, permits, DCs.'
     };
   }
 
@@ -750,6 +833,201 @@ const TO_DC_RATES={
   }
 };
 
+// ── PRE-DEVELOPMENT / PLANNING APPLICATION FEES ──
+// SOURCE: City of Toronto 2026 User Fees - Adjustments Requiring Council Approval
+//         (Appendix A, City Planning and Development Review section)
+//         Toronto Building section (Building Permit fees)
+//         Verified against the official Toronto staff report (background file
+//         261690.pdf) and the City of Toronto Application Fees web page:
+//         https://www.toronto.ca/city-government/planning-development/application-forms-fees/fees/
+//
+// These are the EFFECTIVE 2026 RATES (rate IDs prefixed UR### / BL###).
+// All fees are cost-recovery basis — they go up annually with inflation.
+// Future maintenance: re-fetch from the Toronto fee page each January.
+const TO_PLANNING_FEES = {
+  effectiveDate: '2026-01-01',
+  source: 'City of Toronto 2026 User Fee Schedule (Appendix A)',
+  // Site Plan Approval (s.41) — UR009 / UR010
+  spaBase:       { label: 'Site Plan Approval — Base Fee',           fee: 43605.12 },
+  spaPerSqm:     { label: 'Site Plan Approval — per m² GFA',         perSqm: 5.37, capResi: 621372.96, capNonResi: 621372.96 },
+  spaAmend:      { label: 'Site Plan Amendment',                     fee: 52524.55 },
+  spaAdminAmend: { label: 'Site Plan Administrative Amendment',      fee: 6540.77 },
+  // Zoning By-Law Amendment (s.34) — UR003 / UR003.1 / UR003.7
+  zblaBase:      { label: 'Zoning By-Law Amendment — Base Fee',      fee: 63679.83 },
+  zblaPerSqm:    { label: 'ZBLA — per m² GFA',                       perSqm: 6.23, cap: 779441.52 },
+  // Official Plan Amendment (s.22) — UR001
+  opaBase:       { label: 'Official Plan Amendment — Base Fee',      fee: 232602.79 },
+  // Combined OPA + ZBLA — UR011 / UR012.1 / UR012.5
+  opaZblaPerSqm: { label: 'Combined OPA + ZBLA per m² GFA',          perSqm: 6.23, cap: 872102.40 },
+  // Minor Variance (s.45) — UR016 / UR017
+  mvDwell:       { label: 'Minor Variance — Residential dwellings ≤3 units',  fee: 10022.16 },
+  mvOther:       { label: 'Minor Variance — Multi-residential / Commercial', fee: 12971.18 },
+  // Consent to Sever — UR023 / UR029
+  consent:       { label: 'Consent to Sever',                        fee: 8080.65 },
+  // Holding By-Law Amendment — UR004
+  holding:       { label: 'Holding By-Law Amendment',                fee: 51255.18 },
+  // Section 37 / 45 Community Benefit Agreement legal processing — UR072
+  s37Legal:      { label: 'Section 37 Agreement (Legal Processing)', fee: 76251.18 },
+  // Engineering / Servicing review (informal trade — typical consultant fee, not a city rate)
+  plReview:      { label: 'Engineering / Servicing Review',          fee: 8000 },
+  // Building Permit — Toronto Building Group C (Multi-unit residential) — BL010 / BL011
+  // Per-unit + per-sq.m formula (NOT a flat % of hard cost)
+  permitPerUnit: { label: 'Building Permit — per Residential Unit',  fee: 56.33 },
+  permitPerSqm:  { label: 'Building Permit — per m² GFA (Multi-unit)', perSqm: 29.38 }
+};
+
+// Required consultant studies are NOT itemized here — they're folded into the
+// Due Diligence line under §1 Land Acquisition. This avoids double-counting
+// (e.g. Phase 1 ESA, Geotechnical, Survey, etc. were appearing in both places).
+// If you want consultant studies broken out as their own line items in the
+// future, restore the previous TO_REQUIRED_STUDIES object and re-enable the
+// study branch in calcPlanningFees().
+const TO_REQUIRED_STUDIES = { always: [], conditional: [] };
+
+/**
+ * Determine the most likely approval route for a project based on its FSI
+ * relative to the as-of-right FSI permitted by the zoning by-law.
+ *   ≤ 1.05× as-of-right → as-of-right (SPA only)
+ *   ≤ 1.30× as-of-right → minor variance (Committee of Adjustment)
+ *   ≤ 2.00× as-of-right → ZBLA / rezoning (s.34)
+ *   >  2.00×            → OPA + ZBLA combined (s.22 + s.34)
+ */
+function determineApprovalRoute(fsi, asOfRightFSI){
+  if(!asOfRightFSI || asOfRightFSI <= 0) return 'spa'; // unknown zoning → assume SPA only
+  const ratio = fsi / asOfRightFSI;
+  if(ratio <= 1.05) return 'spa';
+  if(ratio <= 1.30) return 'mv';
+  if(ratio <= 2.00) return 'zba';
+  return 'opa_zba';
+}
+
+/**
+ * Calculate Toronto pre-development / planning application fees + required
+ * consultant studies for a project. Returns line-item detail so it can be
+ * rendered in both the proforma display and the report.
+ *
+ * Uses OFFICIAL 2026 City of Toronto fee schedule (verified from staff report).
+ * Per-sq.m fees are computed from total residential + commercial GFA, then
+ * capped at the City's published maximum charge per application.
+ *
+ * @param {Object} args
+ * @param {string} args.route - 'spa' | 'mv' | 'zba' | 'opa_zba'
+ * @param {number} args.units - residential unit count
+ * @param {number} args.commGFA - commercial GFA in sqft
+ * @param {number} args.totalGFA - total GFA in sqft (used for per-m² fees)
+ * @param {number} args.storeys - max storeys (used to trigger studies)
+ * @param {number} args.totalHard - hard construction cost (legacy param, no longer used for permit)
+ * @returns {{appFees, studyCost, total, route, applications, studies}}
+ */
+function calcPlanningFees(args){
+  const route   = args.route   || 'spa';
+  const units   = args.units   || 0;
+  const commGFA = args.commGFA || 0;
+  const totalGFA = args.totalGFA || 0;
+  const storeys = args.storeys || 1;
+  const SQFT_PER_SQM = 10.7639;
+  // GFA in sq.m — Toronto fees are charged per metric area
+  const totalSqM = Math.max(0, totalGFA / SQFT_PER_SQM);
+  const resiSqM  = Math.max(0, (totalGFA - commGFA) / SQFT_PER_SQM);
+  const commSqM  = Math.max(0, commGFA / SQFT_PER_SQM);
+
+  const apps = [];
+  const studies = [];
+  const F = TO_PLANNING_FEES;
+
+  // ── APPLICATION FEES (2026 schedule) ──
+
+  // Official Plan Amendment (only for opa_zba route — combined application)
+  if(route === 'opa_zba'){
+    apps.push({ id:'opa',     label:'Official Plan Amendment — Base',                  fee: F.opaBase.fee,                              section:'s.22 / UR001' });
+    // Per-m² applies to both residential and non-residential GFA
+    const opaZblaPerSqm = (resiSqM + commSqM) * F.opaZblaPerSqm.perSqm;
+    const opaZblaCap = F.opaZblaPerSqm.cap; // combined max
+    const opaZblaTotalPerSqm = Math.min(opaZblaPerSqm, Math.max(0, opaZblaCap - F.opaBase.fee));
+    if(opaZblaTotalPerSqm > 0){
+      apps.push({ id:'opaZblaSqm', label:'OPA + ZBLA — per m² of GFA ($' + F.opaZblaPerSqm.perSqm + '/m² × ' + Math.round(resiSqM+commSqM).toLocaleString() + ' m²)', fee: opaZblaTotalPerSqm, section:'UR011/UR012' });
+    }
+    apps.push({ id:'s37',     label:'Section 37/45 Community Benefit (Legal)',         fee: F.s37Legal.fee, section:'UR072' });
+  }
+  // ZBLA-only route
+  else if(route === 'zba'){
+    apps.push({ id:'zblaBase', label:'Zoning By-Law Amendment — Base',                fee: F.zblaBase.fee, section:'s.34 / UR003' });
+    const zblaPerSqm = (resiSqM + commSqM) * F.zblaPerSqm.perSqm;
+    // Cap the per-m² portion so total ≤ max charge
+    const zblaPerSqmCapped = Math.min(zblaPerSqm, Math.max(0, F.zblaPerSqm.cap - F.zblaBase.fee));
+    if(zblaPerSqmCapped > 0){
+      apps.push({ id:'zblaSqm', label:'ZBLA — per m² of GFA ($' + F.zblaPerSqm.perSqm + '/m² × ' + Math.round(resiSqM+commSqM).toLocaleString() + ' m²)', fee: zblaPerSqmCapped, section:'UR003.1/UR003.7' });
+    }
+    apps.push({ id:'s37',     label:'Section 37/45 Community Benefit (Legal)',         fee: F.s37Legal.fee, section:'UR072' });
+  }
+  // Minor Variance
+  else if(route === 'mv'){
+    // Use multi-residential / commercial rate for >3 units, otherwise dwelling rate
+    const mvFee = units > 3 ? F.mvOther.fee : F.mvDwell.fee;
+    const mvLabel = units > 3 ? F.mvOther.label : F.mvDwell.label;
+    apps.push({ id:'mv', label: mvLabel, fee: mvFee, section:'s.45' });
+  }
+
+  // SPA always required for new construction (s.41)
+  apps.push({ id:'spaBase', label:'Site Plan Approval — Base', fee: F.spaBase.fee, section:'s.41 / UR009' });
+  // Per-m² SPA fee — split residential vs non-residential, each capped at $621,372.96
+  const spaResiPerSqm = Math.min(resiSqM * F.spaPerSqm.perSqm, F.spaPerSqm.capResi);
+  const spaCommPerSqm = Math.min(commSqM * F.spaPerSqm.perSqm, F.spaPerSqm.capNonResi);
+  if(spaResiPerSqm > 0){
+    apps.push({ id:'spaResi', label:'SPA — per m² Residential GFA ($' + F.spaPerSqm.perSqm + '/m² × ' + Math.round(resiSqM).toLocaleString() + ' m²)', fee: spaResiPerSqm, section:'UR010' });
+  }
+  if(spaCommPerSqm > 0){
+    apps.push({ id:'spaComm', label:'SPA — per m² Non-Residential GFA ($' + F.spaPerSqm.perSqm + '/m² × ' + Math.round(commSqM).toLocaleString() + ' m²)', fee: spaCommPerSqm, section:'UR010' });
+  }
+
+  // Engineering / Servicing review (consultant fee — not a City fee)
+  apps.push({ id:'review',  label: F.plReview.label, fee: F.plReview.fee, section:'Consultant' });
+
+  // Building Permit — Toronto Building Group C (multi-unit residential)
+  // Formula: per-unit + per-sq.m of GFA (BL010/BL011 from 2026 schedule)
+  const permitUnitFee = units * F.permitPerUnit.fee;
+  const permitAreaFee = totalSqM * F.permitPerSqm.perSqm;
+  const permitTotal = permitUnitFee + permitAreaFee;
+  apps.push({
+    id:'permit',
+    label:'Building Permit ($' + F.permitPerUnit.fee + '/unit × ' + units + ' units + $' + F.permitPerSqm.perSqm + '/m² × ' + Math.round(totalSqM).toLocaleString() + ' m²)',
+    fee: permitTotal,
+    section:'OBC / BL010-011'
+  });
+
+  const appFees = apps.reduce((s,a)=>s + (a.fee||0), 0);
+
+  // ── REQUIRED STUDIES (filtered by approval route) ──
+  // Each study is only included if the route triggers it AND any project-scale
+  // condition is met. SPA-only projects get a small set (servicing, geotech,
+  // TGS, arborist, noise). ZBLA / OPA add the full design + planning suite.
+  TO_REQUIRED_STUDIES.always.forEach(st => {
+    if(!st.routes || st.routes.indexOf(route) >= 0){
+      studies.push({ ...st, required:true });
+    }
+  });
+  TO_REQUIRED_STUDIES.conditional.forEach(st => {
+    if(st.routes && st.routes.indexOf(route) < 0) return; // wrong route
+    let triggered = false;
+    if(st.trigger === 'always') triggered = true;
+    else if(st.trigger === 'storeys>4') triggered = storeys > 4;
+    else if(st.trigger === 'storeys>6') triggered = storeys > 6;
+    else if(st.trigger === 'units>80||commGFA>53000') triggered = units > 80 || commGFA > 53000;
+    else if(st.trigger === 'units>100') triggered = units > 100;
+    if(triggered) studies.push({ ...st, required:false });
+  });
+  const studyCost = studies.reduce((s,st)=>s + (st.cost||0), 0);
+
+  return {
+    route,
+    applications: apps,
+    studies: studies,
+    appFees: appFees,
+    studyCost: studyCost,
+    total: appFees + studyCost
+  };
+}
+
 /**
  * Calculate a detailed Development Charge schedule per Toronto DC By-law rates.
  * @param {Array<Object>} unitMix - Array of unit objects with type and count.
@@ -846,18 +1124,31 @@ function pfCalc(){
   const pf=P.pf;
 
   // ── Deductions from residential GFA to get sellable area ──
-  const maxSt=P.vols.reduce((m,v)=>Math.max(m,v.storeys),0);
+  // Use end-storey (start + storeys - 1) so stacked volumes (Tower on Podium, etc.)
+  // count their full vertical reach, not just their own storey count.
+  const _gfH=Math.max(8,(P.flr&&P.flr.gf)||15), _typH=Math.max(7,(P.flr&&P.flr.typ)||10);
+  const _ssOf=v=>(!v.baseElevFt||v.baseElevFt<=0.5)?1:Math.max(1,Math.round((v.baseElevFt-_gfH)/_typH)+2);
+  const maxSt=P.vols.reduce((m,v)=>Math.max(m, _ssOf(v) + (v.storeys||0) - 1),0);
   const resiFloors=Math.max(1,maxSt-(P.vols.some(v=>v.commGF)?1:0));
-  // Per-floor deductions (estimated)
-  const corridorPct=0.15;    // 15% of each floor for corridors/hallways
-  const elevatorSF=(P.core.numElevators||0)*75;   // elevator shafts × 75 sf each
-  const stairSF=(P.core.stairs?P.core.stairs.length:0)*150; // stairwells × 150 sf each
-  const lobbyDeduct=resiGFA>0?Math.min(2500,resiGFA*0.02):0; // ~2% or max 2500sf for lobby
-  const amenityDeduct=resiGFA>0?Math.min(5000,resiGFA*0.04):0; // ~4% or max 5000sf for amenity
-  const corridorTotal=resiGFA*corridorPct;
-  const coreTotal=(elevatorSF+stairSF)*resiFloors;
-  const totalDeductions=corridorTotal+coreTotal+lobbyDeduct+amenityDeduct;
-  const sellableResiSF=Math.max(0,resiGFA-totalDeductions);
+
+  // ── BUILDING EFFICIENCY SLIDER (single source of truth) ──
+  // efficiency = sellable resi / gross resi. User-controlled via slider in
+  // the MASSING and PRO-FORMA tabs. Range 0–100% — no hardcoded structural
+  // floor; the slider is the only thing that determines deductions.
+  const _effRaw = (P.pf.efficiency != null) ? P.pf.efficiency : 0.80;
+  const efficiency = Math.min(1, Math.max(0, _effRaw));
+  const deductPct = 1 - efficiency;
+  const totalDeductions = resiGFA * deductPct;
+  const sellableResiSF = Math.max(0, resiGFA * efficiency);
+
+  // Apportion total deductions across the existing breakdown labels for display.
+  // Split 71/10/19 to match the historic Toronto rule-of-thumb ratio
+  // (15% circulation : 2% lobby : 4% amenity = 71/10/19 of total deductions).
+  // Purely cosmetic — drives only the breakdown table, not any calculation.
+  const corridorTotal = totalDeductions * 0.71;
+  const lobbyDeduct   = totalDeductions * 0.10;
+  const amenityDeduct = totalDeductions * 0.19;
+  const coreTotal = 0; // rolled into corridorTotal
 
   // ── Unit mix — auto-fill to sellable area ──
   // Default unit sizes (used only if user hasn't set a custom size)
@@ -968,13 +1259,24 @@ function pfCalc(){
   if(pf.s37PerUnit  == null) pf.s37PerUnit=7300;   // CBC / S37 per unit
   if(pf.parkland    == null) pf.parkland=2200000;  // parkland dedication ($2.2M default — was incorrectly 0)
   const softCostPct=pf.softCostPct;
-  const softCostBase=totalHard*softCostPct; // A&E, PM, legal, insurance, permits, contingency
+  const softCostBase=totalHard*softCostPct; // A&E, PM, legal, insurance, contingency
   const dcResi=totalUnits*(pf.dcPerUnit||0);
   const dcComm=commGFA*(pf.dcCommPerSF||0);
   const dcTotal=dcResi+dcComm;
   const s37Total=totalUnits*(pf.s37PerUnit||0);
   const parklandCost=pf.parkland||0;
-  const totalSoft=softCostBase+dcTotal+s37Total+parklandCost;
+
+  // ── Pre-Development / Planning Application Fees ──
+  // Real Toronto application fees + required consultant studies. Approval route
+  // is auto-determined from FSI ratio unless the user has manually overridden it.
+  const _aoFSI = (P.zoning && P.zoning.fsiLimit) ? P.zoning.fsiLimit : 0;
+  const _autoRoute = determineApprovalRoute(fsi, _aoFSI);
+  const _route = (pf.approvalRoute && ['spa','mv','zba','opa_zba'].includes(pf.approvalRoute)) ? pf.approvalRoute : _autoRoute;
+  const planningFees = calcPlanningFees({
+    route: _route, units: totalUnits, commGFA: commGFA, totalGFA: totalGFA, storeys: maxSt, totalHard: totalHard
+  });
+
+  const totalSoft=softCostBase+dcTotal+s37Total+parklandCost+planningFees.total;
 
   // ── Construction Schedule — empirical equations ──
   // Derive building parameters from massing model
@@ -1051,9 +1353,11 @@ function pfCalc(){
   const avgDrawPct=0.60; // S-curve average utilization factor
   const constructionInterest=loanBase*pf.intRate*(activeConstructionMonths/12)*avgDrawPct;
   // Carrying costs during pre-development (land holding, insurance, property tax)
-  const preDevCarrying=totalLand*0.03*(preDevelopmentMonths/12); // ~3% annual carrying on land
+  const _preDevRate=(pf.dcf&&pf.dcf.preDevCarryRate!=null)?pf.dcf.preDevCarryRate:0.03;
+  const preDevCarrying=totalLand*_preDevRate*(preDevelopmentMonths/12);
   // Post-completion carrying during absorption (condo fees, marketing, unsold inventory)
-  const postCompCarrying=(totalHard+totalSoft)*0.005*(absorptionMonths/12); // ~0.5% annual
+  const _postCompRate=(pf.dcf&&pf.dcf.postCompCarryRate!=null)?pf.dcf.postCompCarryRate:0.005;
+  const postCompCarrying=(totalHard+totalSoft)*_postCompRate*(absorptionMonths/12);
   const loanFee=loanBase*pf.loanFeePct;
 
   const interest=constructionInterest+preDevCarrying+postCompCarrying;
@@ -1099,6 +1403,7 @@ function pfCalc(){
     altusCity:altusCity.label,altusCityId:altusCity.id,altusCityDist:altusCity.distKm,
     altusCostRange,
     softCostPct,softCostBase,dcResi,dcComm,dcTotal,s37Total,parklandCost,totalSoft,timeAdjSoft,
+    planningFees, approvalRoute:_route, asOfRightFSI:_aoFSI,
     constructionInterest,preDevCarrying,postCompCarrying,interest,loanFee,totalFinancing,
     totalConstructionMonths,preDevelopmentMonths,activeConstructionMonths,absorptionMonths,totalProjectMonths,
     totalCost,margin,marginOnCost,marginOnRev,
@@ -1112,10 +1417,26 @@ function fmt$(n){return n<0?'-$'+Math.abs(Math.round(n)).toLocaleString():'$'+Ma
 function fmtM(n){return (n<0?'-':'')+'$'+Math.abs(n/1e6).toFixed(1)+'M'}
 function pct(n){return (n*100).toFixed(1)+'%'}
 
-// Helper: editable cell that writes back to P.pf and refreshes
+// Helper: editable cell that writes back to P.pf and refreshes.
+// For non-percentage inputs (money, GFA, unit counts, etc.) the displayed value
+// is formatted with thousand-separator commas (e.g. "1,500,000") for readability.
+// On change we strip commas before parsing, then re-format the field so the user
+// sees commas after they finish editing. Percentage inputs (suf="%") are left
+// raw because they're typically small decimals like "2.5".
 function pfInput(val, onChange, opts={}){
   const w=opts.w||70, pre=opts.pre||'', suf=opts.suf||'', step=opts.step||1;
-  return `<input type="number" value="${val}" step="${step}" style="width:${w}px;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;font-size:11px;font-weight:600;text-align:right;padding:2px 6px;border-radius:3px;-moz-appearance:textfield;appearance:textfield" onfocus="this.select()" onchange="(${onChange})(parseFloat(this.value)||0);pfChanged()"> ${suf}`;
+  const useCommas = suf !== '%';
+  const num = Number(val) || 0;
+  // Preserve fractional digits if the source value has them (e.g. 2.5, 1500000.50).
+  const displayVal = useCommas ? num.toLocaleString('en-US',{maximumFractionDigits:20}) : val;
+  // type="text" + inputmode="decimal" gives us comma display while keeping the
+  // mobile numeric keypad. The native spinner was already hidden via CSS, so we
+  // lose nothing visually by moving off type="number".
+  const reformat = useCommas
+    ? "this.value=n.toLocaleString('en-US',{maximumFractionDigits:20});"
+    : "this.value=n;";
+  const onChangeHandler = `var n=parseFloat((this.value||'').replace(/,/g,''))||0;${reformat}(${onChange})(n);pfChanged()`;
+  return `<input type="text" inputmode="decimal" value="${displayVal}" data-step="${step}" style="width:${w}px;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;font-size:11px;font-weight:600;text-align:right;padding:2px 6px;border-radius:3px" onfocus="this.select()" onchange="${onChangeHandler}"> ${suf}`;
 }
 
 /**
@@ -1173,6 +1494,74 @@ function pfChanged(){
 }
 
 /**
+ * Building efficiency slider handler. Drives sellable resi area, unit counts,
+ * and downstream pro-forma. Synced between the MASSING and PRO-FORMA tabs.
+ * Range 0–100% — slider is the SOLE control over deductions; no hardcoded
+ * circulation/lobby/amenity floor is applied.
+ *
+ * When the slider moves, the slider becomes the master control: per-type
+ * count locks are cleared and the floor-by-floor manual schedule is wiped
+ * so pfCalc + buildFloorSchedule auto-redistribute units to the new sellable
+ * area. Without this, manual-mode floor placements would shadow pf.units.count
+ * and the slider would silently change margin but not the visible unit count.
+ *
+ * @param {number} val efficiency as a fraction (0–1) or whole-number percent
+ */
+function setEfficiency(val){
+  let v = Number(val);
+  if(!isFinite(v)) return;
+  v = Math.min(1, Math.max(0, v));
+  P.pf.efficiency = v;
+  // Sync both sliders + their value labels
+  ['eff-slider-massing','eff-slider-pf'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el && Number(el.value) !== Math.round(v*100)) el.value = Math.round(v*100);
+  });
+  ['eff-val-massing','eff-val-pf'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.textContent = Math.round(v*100) + '%';
+  });
+  // Slider is master — clear manual overrides so unit counts re-derive from
+  // the new sellable area. Auto mode + cleared floors + cleared locks lets
+  // pfCalc/buildFloorSchedule do a clean redistribution.
+  if(P.pf._locked) P.pf._locked = {};
+  if(P.unitPlan){
+    P.unitPlan.mode = 'auto';
+    P.unitPlan.floors = [];
+  }
+  pfChanged();
+}
+
+/**
+ * Tower stepback slider handler. Updates stepbackAmt on every volume that has
+ * a podium (podiumStoreys > 0) and triggers a 3D rebuild + pro-forma recalc.
+ * Range 0–15 feet. 5ft is the Toronto minor-variance floor; 10ft is the
+ * Tall Building Guidelines baseline.
+ * @param {number} val stepback in feet (0–15)
+ */
+function setStepback(val){
+  var v = Number(val);
+  if(!isFinite(v)) return;
+  v = Math.max(0, Math.min(15, Math.round(v)));
+  // Apply to every volume that uses a podium stepback.
+  if(P.vols){
+    P.vols.forEach(function(vol){
+      if((vol.podiumStoreys || 0) > 0 || (vol.stepbackAmt || 0) > 0){
+        vol.stepbackAmt = v;
+      }
+    });
+  }
+  // Sync slider DOM and label.
+  var sl = document.getElementById('stepback-slider');
+  if(sl && Number(sl.value) !== v) sl.value = v;
+  var lbl = document.getElementById('stepback-val');
+  if(lbl) lbl.textContent = v + ' ft';
+  // Trigger 3D rebuild + downstream calc + persistence.
+  try { if(typeof rebuildAll === 'function') rebuildAll(); } catch(e){}
+  try { if(typeof autoSave === 'function') autoSave(); } catch(e){}
+}
+
+/**
  * Rebuild the entire pro-forma panel: KPIs, revenue/cost tables, benchmark banner, DCF, and Monte Carlo sections.
  */
 function updateProForma(){
@@ -1196,7 +1585,7 @@ function updateProForma(){
     <div class="pf-kpi-card"><div class="pf-kpi-label">GROSS REVENUE</div><div class="pf-kpi-val">${fmtM(d.totalGrossRev)}</div></div>
     <div class="pf-kpi-card"><div class="pf-kpi-label">PROFIT MARGIN</div><div class="pf-kpi-val" style="color:${_marginColor}">${pct(d.marginOnCost)}</div></div>
     <div class="pf-kpi-card"><div class="pf-kpi-label">RETURN ON EQUITY</div><div class="pf-kpi-val" style="color:${_roeColor}">${pct(d.returnOnEquity)}</div></div>
-    <div class="pf-kpi-card"><div class="pf-kpi-label">UNITS / GFA</div><div class="pf-kpi-val">${d.totalUnits} <span style="font-size:10px;color:#888899">/ ${Math.round(d.totalGFA).toLocaleString()} sf</span></div></div>
+    <div class="pf-kpi-card"><div class="pf-kpi-label">UNITS / GFA</div><div class="pf-kpi-val">${d.totalUnits} <span style="font-size:13px;color:#888899">/ ${Math.round(d.totalGFA).toLocaleString()} sf</span></div></div>
     <div class="pf-kpi-card"><div class="pf-kpi-label">COST / UNIT</div><div class="pf-kpi-val">${fmt$(d.costPerUnit)}</div></div>
   `;
 
@@ -1244,7 +1633,7 @@ function updateProForma(){
     <td class="num">${fmt$(u.revenue)}</td></tr>`).join('');
   document.getElementById('pf-revenue').innerHTML=`
     <div class="pf-section">
-      <div class="pf-title">REVENUE SCHEDULE <span style="font-size:9px;color:#777;font-weight:400">— click any highlighted value to edit</span></div>
+      <div class="pf-title">REVENUE SCHEDULE <span style="font-size:12px;color:#777;font-weight:400">— click any highlighted value to edit</span></div>
 
       <div class="pf-subtitle">Residential Sales</div>
       <table class="pf-table" style="table-layout:fixed">
@@ -1263,11 +1652,11 @@ function updateProForma(){
         }).join('')}
         <tr class="total"><td>Total Residential</td><td></td><td class="num">${d.totalUnits}</td><td class="num">${d.netResiSF.toLocaleString()} sf</td><td></td><td></td><td class="num">${fmt$(d.resiRevenue)}</td></tr>
       </table>
-      <div style="font-size:10px;margin-top:4px;display:flex;justify-content:space-between">
+      <div style="font-size:13px;margin-top:4px;display:flex;justify-content:space-between">
         <span style="color:#777">Sellable: <b style="color:#AEBC46">${d.netResiSF.toLocaleString()} sf</b> of ${Math.round(d.sellableResiSF).toLocaleString()} sf</span>
         <span style="color:${d.netResiSF>d.sellableResiSF?'#ff6644':'#4a8'}">${d.netResiSF>d.sellableResiSF?'\u26A0 OVER by '+Math.round(d.netResiSF-d.sellableResiSF).toLocaleString()+' sf':'\u2713 '+(Math.round(d.sellableResiSF-d.netResiSF)).toLocaleString()+' sf remaining'}</span>
       </div>
-      <div style="font-size:10px;color:#888899;margin-top:2px">Breakeven resi $/sf: <b style="color:#FF9933">${fmt$(d.breakevenPSF)}/sf</b></div>
+      <div style="font-size:13px;color:#888899;margin-top:2px">Breakeven resi $/sf: <b style="color:#FF9933">${fmt$(d.breakevenPSF)}/sf</b></div>
 
       <div class="pf-subtitle">Commercial Income (Cap Rate Valuation)</div>
       <table class="pf-table" style="table-layout:fixed">
@@ -1276,7 +1665,7 @@ function updateProForma(){
         ${commRows}
         <tr class="total"><td>Total Commercial</td><td class="num">${Math.round(d.netLeasableComm).toLocaleString()}</td><td></td><td class="num">${fmt$(d.totalCommNOI)}</td><td></td><td class="num">${fmt$(d.totalCommValue)}</td></tr>
       </table>
-      ${d.yieldOnCost>0?`<div style="font-size:10px;color:#888899;margin-top:2px">Yield on cost: <b style="color:#FF9933">${(d.yieldOnCost*100).toFixed(2)}%</b></div>`:''}
+      ${d.yieldOnCost>0?`<div style="font-size:13px;color:#888899;margin-top:2px">Yield on cost: <b style="color:#FF9933">${(d.yieldOnCost*100).toFixed(2)}%</b></div>`:''}
 
       <div class="pf-subtitle">Ancillary Revenue</div>
       <table class="pf-table">
@@ -1288,12 +1677,12 @@ function updateProForma(){
       <table class="pf-table"><tr class="total"><td>TOTAL GROSS REVENUE</td><td class="num">${fmt$(d.totalGrossRev)}</td><td class="num">${fmt$(d.revPerSF)}/sf</td></tr></table>
 
       <div style="cursor:pointer;margin-top:8px;display:flex;align-items:center;justify-content:space-between;padding:4px 0" onclick="var el=document.getElementById('area-detail');el.style.display=el.style.display==='none'?'block':'none';this.querySelector('.area-arrow').textContent=el.style.display==='none'?'\u25B8':'\u25BE'">
-        <span style="font-size:9px;color:#888899;letter-spacing:1px;font-weight:600">AREA SCHEDULE DETAIL</span>
-        <span class="area-arrow" style="font-size:10px;color:#FF9933">\u25B8</span>
+        <span style="font-size:12px;color:#888899;letter-spacing:1px;font-weight:600">AREA SCHEDULE DETAIL</span>
+        <span class="area-arrow" style="font-size:13px;color:#FF9933">\u25B8</span>
       </div>
       <div id="area-detail" style="display:none">
-        <div class="pf-subtitle" style="font-size:10px">Ground Floor Area Breakdown</div>
-        <table class="pf-table" style="font-size:10px">
+        <div class="pf-subtitle" style="font-size:13px">Ground Floor Area Breakdown</div>
+        <table class="pf-table" style="font-size:13px">
           <tr><td>Gross Ground Floor Area</td><td class="num">${Math.round(d.commGFA).toLocaleString()} sf</td></tr>
           <tr style="color:#888"><td>&nbsp;&nbsp;Less: Lobby & Mailroom</td><td class="num">-${d.gfDeductions.gfLobby.toLocaleString()} sf</td></tr>
           <tr style="color:#888"><td>&nbsp;&nbsp;Less: Elevator Landings (3\u00D7)</td><td class="num">-${d.gfDeductions.gfElevLanding.toLocaleString()} sf</td></tr>
@@ -1304,15 +1693,13 @@ function updateProForma(){
           <tr style="color:#888"><td>&nbsp;&nbsp;Less: Loading (Type G)</td><td class="num">-${d.gfDeductions.gfLoading.toLocaleString()} sf</td></tr>
           <tr class="total"><td><b>Net Leasable Commercial</b></td><td class="num" style="color:#AEBC46"><b>${Math.round(d.netLeasableComm).toLocaleString()} sf</b></td></tr>
         </table>
-        <div class="pf-subtitle" style="font-size:10px">Residential Area Breakdown</div>
-        <table class="pf-table" style="font-size:10px">
+        <div class="pf-subtitle" style="font-size:13px">Residential Area Breakdown</div>
+        <table class="pf-table" style="font-size:13px">
           <tr><td>Gross Residential GFA</td><td class="num">${Math.round(d.resiGFA).toLocaleString()} sf</td></tr>
-          <tr style="color:#888"><td>&nbsp;&nbsp;Less: Corridors/Hallways (15%)</td><td class="num">-${Math.round(d.deductions.corridorTotal).toLocaleString()} sf</td></tr>
-          <tr style="color:#888"><td>&nbsp;&nbsp;Less: Elevator Shafts (3\u00D7)</td><td class="num">-${Math.round(d.deductions.coreTotal*0.43).toLocaleString()} sf</td></tr>
-          <tr style="color:#888"><td>&nbsp;&nbsp;Less: Stairwells (2\u00D7)</td><td class="num">-${Math.round(d.deductions.coreTotal*0.57).toLocaleString()} sf</td></tr>
+          <tr style="color:#888"><td>&nbsp;&nbsp;Less: Circulation (corridors, elevators, stairs)</td><td class="num">-${Math.round(d.deductions.corridorTotal).toLocaleString()} sf</td></tr>
           <tr style="color:#888"><td>&nbsp;&nbsp;Less: Lobby</td><td class="num">-${Math.round(d.deductions.lobbyDeduct).toLocaleString()} sf</td></tr>
           <tr style="color:#888"><td>&nbsp;&nbsp;Less: Amenity Space</td><td class="num">-${Math.round(d.deductions.amenityDeduct).toLocaleString()} sf</td></tr>
-          <tr class="total"><td><b>Sellable Residential Area</b></td><td class="num" style="color:#AEBC46"><b>${Math.round(d.sellableResiSF).toLocaleString()} sf</b></td></tr>
+          <tr class="total"><td><b>Sellable Residential Area</b> <span style="color:#777;font-size:12px;font-weight:400">(${Math.round((d.sellableResiSF/Math.max(1,d.resiGFA))*100)}% efficiency)</span></td><td class="num" style="color:#AEBC46"><b>${Math.round(d.sellableResiSF).toLocaleString()} sf</b></td></tr>
         </table>
       </div>
     </div>`;
@@ -1320,7 +1707,7 @@ function updateProForma(){
   // Costs — single unified table for perfect column alignment
   document.getElementById('pf-costs').innerHTML=`
     <div class="pf-section">
-      <div class="pf-title">DEVELOPMENT BUDGET <span style="font-size:9px;color:#777;font-weight:400">— click any highlighted value to edit</span></div>
+      <div class="pf-title">DEVELOPMENT BUDGET <span style="font-size:12px;color:#777;font-weight:400">— click any highlighted value to edit</span></div>
       <table class="pf-table">
         <colgroup><col style="width:auto"><col style="width:140px"><col style="width:130px"></colgroup>
         <tr><td colspan="3" class="pf-section-hdr">1. Land Acquisition</td></tr>
@@ -1329,20 +1716,34 @@ function updateProForma(){
         <tr><td>Due Diligence</td><td class="num">${ei(pf.ddCost,`v=>{P.pf.ddCost=v}`,{w:80,step:10000})}</td><td></td></tr>
         <tr class="total"><td>Total Land</td><td class="num">${fmt$(d.totalLand)}</td><td class="num">${fmt$(d.totalLand/d.totalGFA)}/sf</td></tr>
 
-        <tr><td colspan="3" class="pf-section-hdr">2. Hard Construction <span style="color:#888;font-size:9px">(${Math.round(d.totalGFA).toLocaleString()} sf GFA)</span></td></tr>
+        <tr><td colspan="3" class="pf-section-hdr">2. Hard Construction <span style="color:#888;font-size:12px">(${Math.round(d.totalGFA).toLocaleString()} sf GFA)</span></td></tr>
         <tr><td>Hard Cost Rate</td><td class="num">${ei(pf.hardCostPSF,`v=>{P.pf.hardCostPSF=Math.max(1,v)}`,{w:65,suf:'$/sf',step:5})}${d.totalGFA>0?bd('hardCostPerSF'):''}</td><td class="num">${fmt$(d.totalHard)}</td></tr>
         <tr class="total"><td>Total Hard</td><td class="num">$${Math.round(d.hardCostPSF)}/sf</td><td class="num">${fmt$(d.totalHard)}</td></tr>
-        <tr><td colspan="3" style="padding:2px 6px;font-size:9px;color:#666;border-bottom:none">Benchmark: $350/sf \u00B7 Altus 2025 ${d.altusCity}: $${d.altusCostRange.low}\u2013$${d.altusCostRange.high}/sf (${d.altusCostRange.tier})</td></tr>
+        <tr><td colspan="3" style="padding:2px 6px;font-size:12px;color:#666;border-bottom:none">Benchmark: $350/sf \u00B7 Altus 2026 ${d.altusCity}: $${d.altusCostRange.low}\u2013$${d.altusCostRange.high}/sf (${d.altusCostRange.tier})</td></tr>
 
-        <tr><td colspan="3" class="pf-section-hdr">3. Soft Costs & Development Charges</td></tr>
-        <tr><td>Soft Cost % <span style="color:#666;font-size:9px">(A&E, PM, permits, contingency)</span></td><td class="num">${ei((pf.softCostPct*100).toFixed(1),`v=>{P.pf.softCostPct=Math.max(0,v/100)}`,{w:55,suf:'%',step:0.5})}${bd('softCostPct')}</td><td class="num">${fmt$(d.softCostBase)}</td></tr>
-        <tr><td>DC — Residential</td><td class="num">${ei(pf.dcPerUnit,`v=>{P.pf.dcPerUnit=Math.max(0,v)}`,{w:75,step:1000})} <span style="color:#666;font-size:9px">/unit</span></td><td class="num">${fmt$(d.dcResi)}</td></tr>
-        ${d.commGFA>0?`<tr><td>DC — Commercial</td><td class="num">${ei(pf.dcCommPerSF,`v=>{P.pf.dcCommPerSF=Math.max(0,v)}`,{w:55,step:1})} <span style="color:#666;font-size:9px">$/sf</span></td><td class="num">${fmt$(d.dcComm)}</td></tr>`:''}
-        <tr><td>CBC / S37</td><td class="num">${ei(pf.s37PerUnit,`v=>{P.pf.s37PerUnit=Math.max(0,v)}`,{w:65,step:500})} <span style="color:#666;font-size:9px">/unit</span></td><td class="num">${fmt$(d.s37Total)}</td></tr>
+        <tr><td colspan="3" class="pf-section-hdr">3. Pre-Development & Approvals
+          <span style="font-size:12px;color:#888;margin-left:8px">Approval Route:</span>
+          <select onchange="P.pf.approvalRoute=this.value;updateProForma();renderReport&&renderReport()" style="background:#1a1a1a;color:#AEBC46;border:1px solid #333;padding:2px 6px;font-size:13px;font-weight:600;border-radius:3px;margin-left:4px">
+            <option value="spa"     ${d.approvalRoute==='spa'?'selected':''}>As-of-Right (SPA only)</option>
+            <option value="mv"      ${d.approvalRoute==='mv'?'selected':''}>Minor Variance</option>
+            <option value="zba"     ${d.approvalRoute==='zba'?'selected':''}>ZBLA Rezoning</option>
+            <option value="opa_zba" ${d.approvalRoute==='opa_zba'?'selected':''}>OPA + ZBLA</option>
+          </select>
+          ${pf.approvalRoute ? '<span style="font-size:12px;color:#AEBC46;margin-left:6px">(manual)</span>' : '<span style="font-size:12px;color:#888;margin-left:6px">(auto: FSI '+(d.fsi||0).toFixed(2)+'× vs '+(d.asOfRightFSI||0).toFixed(1)+'× as-of-right)</span>'}
+        </td></tr>
+        <tr><td colspan="3" style="padding:2px 6px 4px;font-size:12px;color:#888;font-style:italic;border-bottom:none">Application fees per official <a href="https://www.toronto.ca/city-government/planning-development/application-forms-fees/fees/" target="_blank" style="color:#AEBC46">City of Toronto 2026 User Fee Schedule</a> (Appendix A · UR### codes shown per line). Approval route is auto-detected from FSI but may need manual override for site-specific reasons (height, use, density, parking relief, etc.). Consultant studies (Phase 1 ESA, geotech, planning rationale, traffic, etc.) are captured under §1 Land Acquisition → Due Diligence.</td></tr>
+        ${d.planningFees.applications.map(a=>`<tr><td style="padding-left:16px;color:#aaa">${a.label}<span style="color:#666;font-size:12px"> · ${a.section}</span></td><td></td><td class="num">${fmt$(a.fee)}</td></tr>`).join('')}
+        <tr class="total"><td>Total Pre-Development (City Application Fees)</td><td class="num" style="color:#888;font-size:12px">${d.planningFees.applications.length} line items</td><td class="num">${fmt$(d.planningFees.total)}</td></tr>
+
+        <tr><td colspan="3" class="pf-section-hdr">4. Soft Costs & Development Charges</td></tr>
+        <tr><td>Soft Cost % <span style="color:#666;font-size:12px">(A&E, PM, legal, insurance, contingency)</span></td><td class="num">${ei((pf.softCostPct*100).toFixed(1),`v=>{P.pf.softCostPct=Math.max(0,v/100)}`,{w:55,suf:'%',step:0.5})}${bd('softCostPct')}</td><td class="num">${fmt$(d.softCostBase)}</td></tr>
+        <tr><td>DC — Residential</td><td class="num">${ei(pf.dcPerUnit,`v=>{P.pf.dcPerUnit=Math.max(0,v)}`,{w:75,step:1000})} <span style="color:#666;font-size:12px">/unit</span></td><td class="num">${fmt$(d.dcResi)}</td></tr>
+        ${d.commGFA>0?`<tr><td>DC — Commercial</td><td class="num">${ei(pf.dcCommPerSF,`v=>{P.pf.dcCommPerSF=Math.max(0,v)}`,{w:55,step:1})} <span style="color:#666;font-size:12px">$/sf</span></td><td class="num">${fmt$(d.dcComm)}</td></tr>`:''}
+        <tr><td>CBC / S37</td><td class="num">${ei(pf.s37PerUnit,`v=>{P.pf.s37PerUnit=Math.max(0,v)}`,{w:65,step:500})} <span style="color:#666;font-size:12px">/unit</span></td><td class="num">${fmt$(d.s37Total)}</td></tr>
         <tr><td>Parkland Dedication</td><td class="num">${ei(pf.parkland,`v=>{P.pf.parkland=Math.max(0,v)}`,{w:80,step:50000})}</td><td></td></tr>
         <tr class="total"><td>Total Soft & DCs</td><td class="num">${fmt$(d.dcTotal)} DCs · ${(d.softCostPct*100).toFixed(0)}% soft</td><td class="num">${fmt$(d.totalSoft)}</td></tr>
 
-        <tr><td colspan="3" class="pf-section-hdr">4. Financing & Carrying Costs <span style="font-size:9px;color:#888">(${d.totalConstructionMonths}mo build + ${d.absorptionMonths}mo absorption = ${d.totalProjectMonths}mo total)</span></td></tr>
+        <tr><td colspan="3" class="pf-section-hdr">5. Financing & Carrying Costs <span style="font-size:12px;color:#888">(${d.totalConstructionMonths}mo build + ${d.absorptionMonths}mo absorption = ${d.totalProjectMonths}mo total)</span></td></tr>
         <tr><td>Loan-to-Cost</td><td class="num">${ei((pf.ltc*100).toFixed(0),`v=>{P.pf.ltc=v/100}`,{w:52,suf:'%'})}</td><td></td></tr>
         <tr><td>Interest Rate</td><td class="num">${ei((pf.intRate*100).toFixed(1),`v=>{P.pf.intRate=v/100}`,{w:52,suf:'%',step:0.1})}</td><td></td></tr>
         <tr><td style="padding-left:16px;color:#aaa">Construction Interest (${d.activeConstructionMonths}mo \u00D7 60% avg draw)</td><td></td><td class="num">${fmt$(d.constructionInterest)}</td></tr>
@@ -1368,19 +1769,19 @@ function updateProForma(){
       </table>
       <table class="pf-table" style="margin-top:8px">
         <tr><th colspan="3" style="color:#FF9933;letter-spacing:1px">KEY METRICS</th></tr>
-        <tr><td>Profit Margin</td><td class="num" style="color:${_marginColor}">${pct(d.marginOnCost)}${bd('marginOnCost')}</td><td style="font-size:9px;color:#666">target \u2265 15%</td></tr>
+        <tr><td>Profit Margin</td><td class="num" style="color:${_marginColor}">${pct(d.marginOnCost)}${bd('marginOnCost')}</td><td style="font-size:12px;color:#666">target \u2265 15%</td></tr>
         <tr><td>Margin on Revenue</td><td class="num">${pct(d.marginOnRev)}</td><td></td></tr>
-        <tr><td>Return on Equity</td><td class="num" style="color:${_roeColor}">${pct(d.returnOnEquity)}</td><td style="font-size:9px;color:#666">target \u2265 25%</td></tr>
-        <tr><td>Yield on Cost (commercial NOI)</td><td class="num">${(d.yieldOnCost*100).toFixed(2)}%</td><td style="font-size:9px;color:#666">institutional \u2265 5%</td></tr>
+        <tr><td>Return on Equity</td><td class="num" style="color:${_roeColor}">${pct(d.returnOnEquity)}</td><td style="font-size:12px;color:#666">target \u2265 25%</td></tr>
+        <tr><td>Yield on Cost (commercial NOI)</td><td class="num">${(d.yieldOnCost*100).toFixed(2)}%</td><td style="font-size:12px;color:#666">institutional \u2265 5%</td></tr>
         <tr><td>Cost per Unit</td><td class="num">${fmt$(d.costPerUnit)}</td><td></td></tr>
         <tr><td>Revenue per Unit</td><td class="num">${fmt$(d.revPerUnit)}</td><td></td></tr>
-        <tr><td>Breakeven Resi $/sf</td><td class="num">${fmt$(d.breakevenPSF)}/sf</td><td style="font-size:9px;color:#666">must be below sale PSF</td></tr>
+        <tr><td>Breakeven Resi $/sf</td><td class="num">${fmt$(d.breakevenPSF)}/sf</td><td style="font-size:12px;color:#666">must be below sale PSF</td></tr>
       </table>
       <table class="pf-table" style="margin-top:8px">
         <tr><th colspan="3" style="color:#FF9933;letter-spacing:1px">LAND RESIDUAL ANALYSIS</th></tr>
         <tr><td>Current Land Cost</td><td class="num">${fmt$(d.totalLand)}</td><td class="num" style="color:#888899">${fmt$(d.totalLand/d.totalGFA)}/sf GFA</td></tr>
         <tr><td>Land Residual @ 15% MOC</td><td class="num" style="color:${_landResColor}">${fmt$(d.landResidual15)}</td><td class="num" style="color:${_landResColor}">${d.totalGFA>0?fmt$(d.landResidual15/d.totalGFA)+'/sf GFA':'-'}</td></tr>
-        <tr><td>Headroom</td><td class="num" style="color:${_landResColor}">${fmt$(d.landResidual15-d.totalLand)}</td><td style="font-size:9px;color:#666">${d.landResidual15>=d.totalLand?'land price supportable':'land too expensive at 15% target'}</td></tr>
+        <tr><td>Headroom</td><td class="num" style="color:${_landResColor}">${fmt$(d.landResidual15-d.totalLand)}</td><td style="font-size:12px;color:#666">${d.landResidual15>=d.totalLand?'land price supportable':'land too expensive at 15% target'}</td></tr>
       </table>
       <div class="pf-note">${d.marginOnCost>=0.15?'\u2713 Above 15% threshold \u2014 project is viable':'\u26A0 Below 15% threshold \u2014 review cost/revenue assumptions'}</div>
     </div>`;
@@ -1419,7 +1820,7 @@ function updateProForma(){
     const barW=wfMax>0?Math.round(val/wfMax*100):0;
     wfHTML+=`<tr><td style="width:140px">${label}</td><td class="num" style="width:90px">${fmtM(val)}</td>
       <td><div style="background:#AEBC46;height:12px;width:${barW}%;border-radius:2px;opacity:.7"></div></td>
-      <td class="num" style="width:40px;font-size:10px">${pct(val/d.totalCost)}</td></tr>`;
+      <td class="num" style="width:40px;font-size:13px">${pct(val/d.totalCost)}</td></tr>`;
   });
   wfHTML+=`<tr class="total"><td>TOTAL</td><td class="num">${fmtM(d.totalCost)}</td><td></td><td class="num">100%</td></tr></table></div>`;
   document.getElementById('pf-waterfall').innerHTML=wfHTML;
@@ -1439,7 +1840,8 @@ function updateProForma(){
 function ensureDCFDefaults(){
   if(!P.pf.dcf){
     P.pf.dcf={discountRate:0.08,preSalesPct:0.70,preSalesDeposit:0.20,absorptionMonths:18,
-      constructionRate:0.065,equityPct:0.35,phases:TIMELINE_ASOFRIGHT.map(p=>({...p}))};
+      constructionRate:0.065,equityPct:0.35,preDevCarryRate:0.03,postCompCarryRate:0.005,
+      phases:TIMELINE_ASOFRIGHT.map(p=>({...p}))};
     _lastAutoTimeline='asofright';
   }
   // Auto-apply timeline preset (unless user has manually edited)
@@ -1820,22 +2222,30 @@ function renderDCF(pfResult){
   const inputsEl=document.getElementById('pf-dcf-inputs');
   if(inputsEl){
     inputsEl.innerHTML=`
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
         <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
-          <div style="color:#888;font-size:9px">Discount Rate</div>
+          <div style="color:#888;font-size:12px">Discount Rate</div>
           <div>${ei((dcf.discountRate*100).toFixed(1),`v=>{P.pf.dcf.discountRate=v/100}`,{w:52,suf:'%',step:0.5})}</div>
         </div>
         <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
-          <div style="color:#888;font-size:9px">Pre-Sales %</div>
+          <div style="color:#888;font-size:12px">Pre-Sales %</div>
           <div>${ei(((dcf.preSalesPct||0.7)*100).toFixed(0),`v=>{P.pf.dcf.preSalesPct=v/100}`,{w:52,suf:'%'})}</div>
         </div>
         <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
-          <div style="color:#888;font-size:9px">Deposit %</div>
+          <div style="color:#888;font-size:12px">Deposit %</div>
           <div>${ei(((dcf.preSalesDeposit||0.2)*100).toFixed(0),`v=>{P.pf.dcf.preSalesDeposit=v/100}`,{w:52,suf:'%'})}</div>
         </div>
         <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
-          <div style="color:#888;font-size:9px">Construction Rate</div>
+          <div style="color:#888;font-size:12px">Construction Rate</div>
           <div>${ei((dcf.constructionRate*100).toFixed(1),`v=>{P.pf.dcf.constructionRate=v/100}`,{w:52,suf:'%',step:0.25})}</div>
+        </div>
+        <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
+          <div style="color:#888;font-size:12px">Pre-Dev Carry Rate</div>
+          <div>${ei(((dcf.preDevCarryRate!=null?dcf.preDevCarryRate:0.03)*100).toFixed(1),`v=>{P.pf.dcf.preDevCarryRate=v/100}`,{w:52,suf:'%',step:0.25})}</div>
+        </div>
+        <div style="background:#1a1a1a;padding:8px;border-radius:4px;border:1px solid #333">
+          <div style="color:#888;font-size:12px">Post-Comp Carry Rate</div>
+          <div>${ei(((dcf.postCompCarryRate!=null?dcf.postCompCarryRate:0.005)*100).toFixed(2),`v=>{P.pf.dcf.postCompCarryRate=v/100}`,{w:52,suf:'%',step:0.05})}</div>
         </div>
       </div>`;
   }
@@ -1995,27 +2405,27 @@ function renderDCF(pfResult){
 
     // ── Phase editor — compact table ──
     const _absStartVal=dcf.absorptionStart!=null?dcf.absorptionStart:Math.max(...dcf.phases.map(p=>(p.startMonth||0)+(p.months||0)));
-    const _inBase='width:26px;background:#111;border:1px solid #333;font-size:10px;text-align:center;padding:2px 1px;border-radius:3px;font-family:inherit;-moz-appearance:textfield;appearance:textfield';
+    const _inBase='width:26px;background:#111;border:1px solid #333;font-size:13px;text-align:center;padding:2px 1px;border-radius:3px;font-family:inherit;-moz-appearance:textfield;appearance:textfield';
     let phaseInputs=`<div style="overflow-x:auto;margin-top:8px"><table style="border-collapse:collapse;font-family:inherit;white-space:nowrap"><tr>`;
     dcf.phases.forEach((ph,i)=>{
       const sn=ph.label.split(/\s*[&/]\s*/)[0].replace('Below-Grade','Below').replace('Above-Grade','Above').replace('Pre-application','Pre-app').replace('Commissioning','Commission').trim();
       phaseInputs+=`<td style="padding:0 4px;text-align:center;vertical-align:middle">
-        <div style="font-size:8px;color:#666;margin-bottom:2px;letter-spacing:0.3px">${sn}</div>
+        <div style="font-size:11px;color:#666;margin-bottom:2px;letter-spacing:0.3px">${sn}</div>
         <div style="display:flex;align-items:center;gap:2px;justify-content:center">
           <input type="number" value="${ph.startMonth||0}" min="0" max="120" step="1" style="color:#88bbdd;${_inBase}"
             onchange="_dcfPhasesManuallyEdited=true;P.pf.dcf.phases[${i}].startMonth=Math.max(0,parseInt(this.value)||0);pfChanged()">
-          <span style="color:#333;font-size:8px">+</span>
+          <span style="color:#333;font-size:11px">+</span>
           <input type="number" value="${ph.months||0}" min="0" max="60" step="1" style="color:#AEBC46;${_inBase}"
             onchange="_dcfPhasesManuallyEdited=true;P.pf.dcf.phases[${i}].months=Math.max(0,parseInt(this.value)||0);pfChanged()">
         </div>
       </td>`;
     });
     phaseInputs+=`<td style="padding:0 4px 0 10px;text-align:center;vertical-align:middle;border-left:1px solid #2a2a2e">
-      <div style="font-size:8px;color:#6aaa6a;margin-bottom:2px;letter-spacing:0.3px">Absorption</div>
+      <div style="font-size:11px;color:#6aaa6a;margin-bottom:2px;letter-spacing:0.3px">Absorption</div>
       <div style="display:flex;align-items:center;gap:2px;justify-content:center">
         <input type="number" value="${_absStartVal}" min="0" max="120" step="1" style="color:#88bbdd;${_inBase}"
           onchange="P.pf.dcf.absorptionStart=Math.max(0,parseInt(this.value)||0);pfChanged()">
-        <span style="color:#333;font-size:8px">+</span>
+        <span style="color:#333;font-size:11px">+</span>
         <input type="number" value="${dcf.absorptionMonths||18}" min="1" max="60" step="1" style="color:#AEBC46;${_inBase}"
           onchange="P.pf.dcf.absorptionMonths=Math.max(1,parseInt(this.value)||1);pfChanged()">
       </div>
@@ -2051,19 +2461,19 @@ function renderDCF(pfResult){
       const reasonText=reasons.length>0?' \u2014 '+reasons.join(', '):'';
       timelineBanner=`<div style="background:${timelineBg};border:1px solid ${timelineBorder};border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
         <div style="display:flex;align-items:center;gap:12px">
-          <span style="font-size:10px;font-weight:700;color:${timelineColor}">${isZBLA?'\u26A0':'\u2713'} ${timelineType}</span>
-          <span style="font-size:9px;color:#666">Total: <b style="color:#aaa">${totalWithAbs}mo</b> (construction + ${dcf.absorptionMonths||18}mo absorption)${reasonText}</span>
+          <span style="font-size:13px;font-weight:700;color:${timelineColor}">${isZBLA?'\u26A0':'\u2713'} ${timelineType}</span>
+          <span style="font-size:12px;color:#666">Total: <b style="color:#aaa">${totalWithAbs}mo</b> (construction + ${dcf.absorptionMonths||18}mo absorption)${reasonText}</span>
         </div>
         <div style="display:flex;gap:6px;align-items:center">`;
-      if(_dcfPhasesManuallyEdited) timelineBanner+=`<span style="font-size:8px;color:#555;font-style:italic">manually edited</span>`;
-      timelineBanner+=`<button onclick="_dcfPhasesManuallyEdited=false;_lastAutoTimeline=null;pfChanged()" style="background:#1a1a1e;border:1px solid #333;color:#888;padding:3px 10px;border-radius:4px;font-size:9px;cursor:pointer;font-family:inherit" title="Reset to auto-calculated schedule">\u21BB Auto</button>
+      if(_dcfPhasesManuallyEdited) timelineBanner+=`<span style="font-size:11px;color:#555;font-style:italic">manually edited</span>`;
+      timelineBanner+=`<button onclick="_dcfPhasesManuallyEdited=false;_lastAutoTimeline=null;pfChanged()" style="background:#1a1a1e;border:1px solid #333;color:#888;padding:3px 10px;border-radius:4px;font-size:12px;cursor:pointer;font-family:inherit" title="Reset to auto-calculated schedule">\u21BB Auto</button>
         </div></div>`;
     }
 
     ganttEl.innerHTML=`<div style="background:#111114;border:1px solid #2a2a2e;border-radius:6px;padding:10px 10px 6px;overflow-x:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-size:11px;font-weight:700;color:#AEBC46;letter-spacing:1.5px">DEVELOPMENT PLAN</div>
-        <div style="font-size:9px;color:#555">Start: ${calLabel(0)} \u2014 Completion: ${calLabel(totalMonths)} \u2014 Stabilized: ${calLabel(totalMonths+dcfResult.absMonths)}</div>
+        <div style="font-size:12px;color:#555">Start: ${calLabel(0)} \u2014 Completion: ${calLabel(totalMonths)} \u2014 Stabilized: ${calLabel(totalMonths+dcfResult.absMonths)}</div>
       </div>
       ${timelineBanner}${gSvg}${phaseInputs}</div>`;
 
@@ -2140,25 +2550,25 @@ function renderDCF(pfResult){
     sumEl.innerHTML=`
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
       <div style="background:#1a1a1a;padding:10px;border-radius:4px;border:1px solid #333;border-left:3px solid ${irrColor}">
-        <div style="color:#888;font-size:9px">Project IRR (Unlevered)</div>
+        <div style="color:#888;font-size:12px">Project IRR (Unlevered)</div>
         <div style="color:${irrColor};font-weight:700;font-size:16px">${(irr*100).toFixed(1)}%</div>
       </div>
       <div style="background:#1a1a1a;padding:10px;border-radius:4px;border:1px solid #333;border-left:3px solid #c49ade">
-        <div style="color:#888;font-size:9px">NPV @ ${(dcf.discountRate*100).toFixed(0)}%</div>
+        <div style="color:#888;font-size:12px">NPV @ ${(dcf.discountRate*100).toFixed(0)}%</div>
         <div style="color:#c49ade;font-weight:700;font-size:16px">${fmtM(npv)}</div>
       </div>
       <div style="background:#1a1a1a;padding:10px;border-radius:4px;border:1px solid #333;border-left:3px solid #4ecdc4">
-        <div style="color:#888;font-size:9px">Equity Multiple</div>
+        <div style="color:#888;font-size:12px">Equity Multiple</div>
         <div style="color:#4ecdc4;font-weight:700;font-size:16px">${equityMultiple.toFixed(2)}x</div>
       </div>
       <div style="background:#1a1a1a;padding:10px;border-radius:4px;border:1px solid #333;border-left:3px solid #e8c87a">
-        <div style="color:#888;font-size:9px">Peak Equity Req.</div>
+        <div style="color:#888;font-size:12px">Peak Equity Req.</div>
         <div style="color:#e8c87a;font-weight:700;font-size:16px">${fmtM(peakEquity)}</div>
       </div>
       <div style="background:#1a1a1a;padding:10px;border-radius:4px;border:1px solid #333;border-left:3px solid #88aabb">
-        <div style="color:#888;font-size:9px">Project Duration</div>
+        <div style="color:#888;font-size:12px">Project Duration</div>
         <div style="color:#88aabb;font-weight:700;font-size:16px">${(totalMonths+dcfResult.absMonths)+' mo'}</div>
-        <div style="color:#666;font-size:9px">${(totalMonths/12).toFixed(1)+' yr build + '+(dcfResult.absMonths/12).toFixed(1)+' yr abs.'}</div>
+        <div style="color:#666;font-size:12px">${(totalMonths/12).toFixed(1)+' yr build + '+(dcfResult.absMonths/12).toFixed(1)+' yr abs.'}</div>
       </div>
     </div>`;
   }
@@ -2337,24 +2747,24 @@ function renderMonteCarlo(pfResult){
   const viableThreshold=0.15;
   const viableLabel='>15%';
 
-  let html=`<div class="pf-section"><div class="pf-title" style="color:#e07b6a">MONTE CARLO RISK ANALYSIS <span style="font-size:10px;color:#888">(${s.iterations.toLocaleString()} simulations)</span></div>`;
+  let html=`<div class="pf-section"><div class="pf-title" style="color:#e07b6a">MONTE CARLO RISK ANALYSIS <span style="font-size:13px;color:#888">(${s.iterations.toLocaleString()} simulations)</span></div>`;
 
   // ── Summary Cards ──
   html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0">
     <div style="background:#1a1a1a;padding:10px;border-radius:4px;border-left:3px solid ${s.probViable>=0.6?'#4a8':'#e07b6a'}">
-      <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1px">Prob. Viable (${viableLabel})</div>
+      <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Prob. Viable (${viableLabel})</div>
       <div style="font-size:22px;font-weight:700;color:${s.probViable>=0.6?'#AEBC46':'#e07b6a'}">${pct(s.probViable)}</div>
     </div>
     <div style="background:#1a1a1a;padding:10px;border-radius:4px;border-left:3px solid #c49ade">
-      <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1px">Median IRR</div>
+      <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Median IRR</div>
       <div style="font-size:22px;font-weight:700;color:#c49ade">${pct(s.irrMedian)}</div>
     </div>
     <div style="background:#1a1a1a;padding:10px;border-radius:4px;border-left:3px solid #4ecdc4">
-      <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1px">Median Margin</div>
+      <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Median Margin</div>
       <div style="font-size:22px;font-weight:700;color:#4ecdc4">${pct(s.marginMedian)}</div>
     </div>
     <div style="background:#1a1a1a;padding:10px;border-radius:4px;border-left:3px solid #e8c87a">
-      <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1px">Value at Risk (P10)</div>
+      <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Value at Risk (P10)</div>
       <div style="font-size:22px;font-weight:700;color:#e8c87a">${pct(s.varAt10)}</div>
     </div>
   </div>`;
@@ -2367,7 +2777,7 @@ function renderMonteCarlo(pfResult){
 
   html+=`<div style="display:flex;gap:12px;margin:10px 0">`;
   html+=`<div style="flex:1.5;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px">
-    <div style="font-size:10px;font-weight:700;color:#c49ade;letter-spacing:1px;margin-bottom:6px">IRR DISTRIBUTION</div>
+    <div style="font-size:13px;font-weight:700;color:#c49ade;letter-spacing:1px;margin-bottom:6px">IRR DISTRIBUTION</div>
     <svg width="${hW}" height="${hH}" style="display:block;font-family:Outfit,DM Sans,sans-serif">
       <rect width="${hW}" height="${hH}" fill="#1a1a1a" rx="4"/>`;
 
@@ -2390,7 +2800,7 @@ function renderMonteCarlo(pfResult){
   html+=`<text x="${hPadL-4}" y="${hPadT+hPlotH}" fill="#777" font-size="7" text-anchor="end">0</text>`;
 
   html+=`</svg>
-    <div style="font-size:8px;color:#666;margin-top:4px">P10: ${pct(s.irrP10)} · P25: ${pct(s.irrP25)} · Median: ${pct(s.irrMedian)} · P75: ${pct(s.irrP75)} · P90: ${pct(s.irrP90)}</div>
+    <div style="font-size:11px;color:#666;margin-top:4px">P10: ${pct(s.irrP10)} · P25: ${pct(s.irrP25)} · Median: ${pct(s.irrMedian)} · P75: ${pct(s.irrP75)} · P90: ${pct(s.irrP90)}</div>
   </div>`;
 
   // ── Tornado Chart ──
@@ -2401,7 +2811,7 @@ function renderMonteCarlo(pfResult){
   const tMaxSwing=Math.max(...tornadoTop.map(t=>t.swing),0.01);
 
   html+=`<div style="flex:1;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px">
-    <div style="font-size:10px;font-weight:700;color:#e8c87a;letter-spacing:1px;margin-bottom:6px">SENSITIVITY TORNADO</div>
+    <div style="font-size:13px;font-weight:700;color:#e8c87a;letter-spacing:1px;margin-bottom:6px">SENSITIVITY TORNADO</div>
     <svg width="${tW}" height="${tH}" style="display:block;font-family:Outfit,DM Sans,sans-serif">
       <rect width="${tW}" height="${tH}" fill="#1a1a1a" rx="4"/>`;
 

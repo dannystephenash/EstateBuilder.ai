@@ -166,31 +166,31 @@ function renderZoningDashboard(){
   // Header card — zone info + score
   html+=`<div style="display:grid;grid-template-columns:1fr auto;gap:16px;margin-bottom:14px;padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:6px">
     <div>
-      <div style="font-size:9px;color:#888;letter-spacing:2px;margin-bottom:4px">DETECTED ZONING</div>
+      <div style="font-size:12px;color:#888;letter-spacing:2px;margin-bottom:4px">DETECTED ZONING</div>
       <div style="font-size:18px;font-weight:700;color:#AEBC46">${z.zoneString||z.zone}</div>
-      <div style="font-size:10px;color:#888;margin-top:4px">${z.permitted.join(' · ')}</div>
-      ${z.exception?'<div style="font-size:10px;color:#e8c87a;margin-top:4px">⚠ Exception #'+z.exceptionNo+' applies — '+z.bylawException+'</div>':''}
-      ${z.bylawSection?'<div style="font-size:10px;color:#666;margin-top:2px">By-law Section: '+z.bylawSection+'</div>':''}
+      <div style="font-size:13px;color:#888;margin-top:4px">${z.permitted.join(' · ')}</div>
+      ${z.exception?'<div style="font-size:13px;color:#e8c87a;margin-top:4px">⚠ Exception #'+z.exceptionNo+' applies — '+z.bylawException+'</div>':''}
+      ${z.bylawSection?'<div style="font-size:13px;color:#666;margin-top:2px">By-law Section: '+z.bylawSection+'</div>':''}
     </div>
     <div style="text-align:center;padding:8px 16px;border-left:1px solid #333">
-      <div style="font-size:9px;color:#888;letter-spacing:2px;margin-bottom:4px">COMPLIANCE</div>
+      <div style="font-size:12px;color:#888;letter-spacing:2px;margin-bottom:4px">COMPLIANCE</div>
       <div id="zd-score-pct" style="font-size:32px;font-weight:700;color:${scoreColor}">${score}%</div>
-      <div id="zd-score-detail" style="font-size:10px;color:#888">${passCount}/${totalChecks} checks pass</div>
+      <div id="zd-score-detail" style="font-size:13px;color:#888">${passCount}/${totalChecks} checks pass</div>
     </div>
   </div>`;
 
   // Density & massing checks
   if(checks.length>0){
-    html+='<div style="font-size:10px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin-bottom:8px">DENSITY & MASSING</div>';
+    html+='<div style="font-size:13px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin-bottom:8px">DENSITY & MASSING</div>';
     checks.forEach(c=>{
       const barColor=c.pass?'#4ecdc4':'#c44';
       const barPct=Math.min(c.pct,120);
       html+=`<div style="background:#1a1a1a;border:1px solid ${c.pass?'#333':'#c44'};border-radius:4px;padding:10px 12px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
           <span style="font-weight:700;color:#eee">${c.label}</span>
-          <span style="font-size:10px;font-weight:700;color:${c.pass?'#4ecdc4':'#c44'}">${c.pass?'✓ COMPLIANT':'✗ NON-COMPLIANT'}</span>
+          <span style="font-size:13px;font-weight:700;color:${c.pass?'#4ecdc4':'#c44'}">${c.pass?'✓ COMPLIANT':'✗ NON-COMPLIANT'}</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;margin-bottom:6px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:13px;margin-bottom:6px">
           <div><span style="color:#888">Permitted:</span> <span style="color:#AEBC46;font-weight:600">${c.permitted}</span></div>
           <div><span style="color:#888">Proposed:</span> <span style="color:#eee;font-weight:600">${c.proposed}</span></div>
           <div><span style="color:#888">Headroom:</span> <span style="color:${c.pass?'#4ecdc4':'#c44'};font-weight:600">${c.headroom}</span></div>
@@ -198,24 +198,24 @@ function renderZoningDashboard(){
         <div style="background:#333;border-radius:3px;height:6px;overflow:hidden;margin-bottom:3px">
           <div style="background:${barColor};height:100%;width:${Math.min(barPct,100)}%;transition:width 0.3s;border-radius:3px;${barPct>100?'box-shadow:0 0 6px '+barColor:''}"></div>
         </div>
-        <div style="font-size:9px;color:#666">${c.detail}</div>
+        <div style="font-size:12px;color:#666">${c.detail}</div>
       </div>`;
     });
   }
 
   // Setback checks
   if(setbackChecks.length>0){
-    html+='<div style="font-size:10px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin:12px 0 8px">SETBACKS & STEP-BACKS</div>';
+    html+='<div style="font-size:13px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin:12px 0 8px">SETBACKS & STEP-BACKS</div>';
     html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
     setbackChecks.forEach(c=>{
       html+=`<div style="background:#1a1a1a;border:1px solid ${c.pass?'#333':'#c44'};border-radius:4px;padding:8px 10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <span style="font-weight:600;color:#eee;font-size:10px">${c.label}</span>
-          <span style="font-size:9px;font-weight:700;color:${c.pass?'#4ecdc4':'#c44'}">${c.pass?'✓':'✗'}</span>
+          <span style="font-weight:600;color:#eee;font-size:13px">${c.label}</span>
+          <span style="font-size:12px;font-weight:700;color:${c.pass?'#4ecdc4':'#c44'}">${c.pass?'✓':'✗'}</span>
         </div>
-        <div style="font-size:10px"><span style="color:#888">Min:</span> <span style="color:#AEBC46">${c.min}</span></div>
-        <div style="font-size:10px"><span style="color:#888">Set:</span> <span style="color:#eee">${c.proposed}</span></div>
-        <div style="font-size:9px;color:${c.pass?'#4ecdc4':'#c44'};margin-top:2px">${c.headroom}</div>
+        <div style="font-size:13px"><span style="color:#888">Min:</span> <span style="color:#AEBC46">${c.min}</span></div>
+        <div style="font-size:13px"><span style="color:#888">Set:</span> <span style="color:#eee">${c.proposed}</span></div>
+        <div style="font-size:12px;color:${c.pass?'#4ecdc4':'#c44'};margin-top:2px">${c.headroom}</div>
       </div>`;
     });
     html+='</div>';
@@ -226,7 +226,7 @@ function renderZoningDashboard(){
   const apFront=_angularPlaneResults.front;
   const apRear=_angularPlaneResults.rear;
   if(apFront||apRear){
-    html+='<div style="font-size:10px;font-weight:700;color:#c49ade;letter-spacing:2px;margin:12px 0 8px">ANGULAR PLANE ENVELOPES</div>';
+    html+='<div style="font-size:13px;font-weight:700;color:#c49ade;letter-spacing:2px;margin:12px 0 8px">ANGULAR PLANE ENVELOPES</div>';
     html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
 
     // Front angular plane
@@ -241,12 +241,12 @@ function renderZoningDashboard(){
       allChecks.push({pass:fPass});
       html+=`<div style="background:#1a1a1a;border:1px solid ${fPass?'#333':'#c44'};border-radius:4px;padding:8px 10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <span style="font-weight:600;color:#eee;font-size:10px">Angular Plane (Front)</span>
-          <span style="font-size:9px;font-weight:700;color:${fPass?'#4ecdc4':'#c44'}">${fPass?'✓':'✗'}</span>
+          <span style="font-weight:600;color:#eee;font-size:13px">Angular Plane (Front)</span>
+          <span style="font-size:12px;font-weight:700;color:${fPass?'#4ecdc4':'#c44'}">${fPass?'✓':'✗'}</span>
         </div>
-        <div style="font-size:10px"><span style="color:#888">Rule:</span> <span style="color:#c49ade">45° from ROW</span></div>
-        <div style="font-size:10px"><span style="color:#888">ROW:</span> <span style="color:#eee">${apFront.rowWidthM.toFixed(1)}m</span></div>
-        <div style="font-size:9px;color:${fPass?'#4ecdc4':'#c44'};margin-top:2px">${fPass?'All storeys within envelope':apFront.violations.length+' volume(s) exceed plane'}</div>
+        <div style="font-size:13px"><span style="color:#888">Rule:</span> <span style="color:#c49ade">45° from ROW</span></div>
+        <div style="font-size:13px"><span style="color:#888">ROW:</span> <span style="color:#eee">${apFront.rowWidthM.toFixed(1)}m</span></div>
+        <div style="font-size:12px;color:${fPass?'#4ecdc4':'#c44'};margin-top:2px">${fPass?'All storeys within envelope':apFront.violations.length+' volume(s) exceed plane'}</div>
       </div>`;
     }
 
@@ -261,12 +261,12 @@ function renderZoningDashboard(){
       allChecks.push({pass:rPass});
       html+=`<div style="background:#1a1a1a;border:1px solid ${rPass?'#333':'#c44'};border-radius:4px;padding:8px 10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <span style="font-weight:600;color:#eee;font-size:10px">Rear Transition Plane</span>
-          <span style="font-size:9px;font-weight:700;color:${rPass?'#4ecdc4':'#c44'}">${rPass?'✓':'✗'}</span>
+          <span style="font-weight:600;color:#eee;font-size:13px">Rear Transition Plane</span>
+          <span style="font-size:12px;font-weight:700;color:${rPass?'#4ecdc4':'#c44'}">${rPass?'✓':'✗'}</span>
         </div>
-        <div style="font-size:10px"><span style="color:#888">Rule:</span> <span style="color:#e88d7a">45° at 10.5m</span></div>
-        <div style="font-size:10px"><span style="color:#888">Origin:</span> <span style="color:#eee">Rear lot line</span></div>
-        <div style="font-size:9px;color:${rPass?'#4ecdc4':'#c44'};margin-top:2px">${rPass?'All storeys within envelope':apRear.violations.length+' volume(s) exceed plane'}</div>
+        <div style="font-size:13px"><span style="color:#888">Rule:</span> <span style="color:#e88d7a">45° at 10.5m</span></div>
+        <div style="font-size:13px"><span style="color:#888">Origin:</span> <span style="color:#eee">Rear lot line</span></div>
+        <div style="font-size:12px;color:${rPass?'#4ecdc4':'#c44'};margin-top:2px">${rPass?'All storeys within envelope':apRear.violations.length+' volume(s) exceed plane'}</div>
       </div>`;
     }
     html+='</div>';
@@ -275,11 +275,11 @@ function renderZoningDashboard(){
     const allViolations=[...(apFront?apFront.violations:[]),...(apRear?apRear.violations:[])];
     if(allViolations.length>0){
       html+='<div style="background:#1a1a1a;border:1px solid #c44;border-radius:4px;padding:8px 10px;margin-top:6px">';
-      html+='<div style="font-size:9px;font-weight:700;color:#c44;margin-bottom:4px">ANGULAR PLANE VIOLATIONS</div>';
+      html+='<div style="font-size:12px;font-weight:700;color:#c44;margin-bottom:4px">ANGULAR PLANE VIOLATIONS</div>';
       if(apFront&&apFront.violations.length>0){
         apFront.violations.forEach(v=>{
           v.storeys.forEach(s=>{
-            html+=`<div style="font-size:10px;color:#ddd;margin-bottom:2px">
+            html+=`<div style="font-size:13px;color:#ddd;margin-bottom:2px">
               <span style="color:#4ecdc4">▲ Front</span> ${v.label} — Storey ${s.storey}: building at ${s.floorTop.toFixed(1)}m, plane allows ${s.maxAllowed.toFixed(1)}m <span style="color:#c44">(+${s.overshoot.toFixed(1)}m over)</span>
             </div>`;
           });
@@ -288,7 +288,7 @@ function renderZoningDashboard(){
       if(apRear&&apRear.violations.length>0){
         apRear.violations.forEach(v=>{
           v.storeys.forEach(s=>{
-            html+=`<div style="font-size:10px;color:#ddd;margin-bottom:2px">
+            html+=`<div style="font-size:13px;color:#ddd;margin-bottom:2px">
               <span style="color:#e88d7a">▲ Rear</span> ${v.label} — Storey ${s.storey}: building at ${s.floorTop.toFixed(1)}m, plane allows ${s.maxAllowed.toFixed(1)}m <span style="color:#c44">(+${s.overshoot.toFixed(1)}m over)</span>
             </div>`;
           });
@@ -304,7 +304,7 @@ function renderZoningDashboard(){
   const finalScore=finalTotalChecks>0?Math.round(finalPassCount/finalTotalChecks*100):0;
 
   // Optimization suggestions
-  html+='<div style="font-size:10px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin:14px 0 8px">OPTIMIZATION OPPORTUNITIES</div>';
+  html+='<div style="font-size:13px;font-weight:700;color:#4ecdc4;letter-spacing:2px;margin:14px 0 8px">OPTIMIZATION OPPORTUNITIES</div>';
   html+='<div style="background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:10px 12px">';
 
   const suggestions=[];
@@ -330,12 +330,12 @@ function renderZoningDashboard(){
   }
 
   suggestions.forEach(s=>{
-    html+='<div style="margin-bottom:6px;font-size:10px"><span style="margin-right:6px">'+s.icon+'</span><span style="color:#ddd">'+s.text+'</span></div>';
+    html+='<div style="margin-bottom:6px;font-size:13px"><span style="margin-right:6px">'+s.icon+'</span><span style="color:#ddd">'+s.text+'</span></div>';
   });
   html+='</div>';
 
   // Footnote
-  html+='<div style="font-size:9px;color:#555;margin-top:12px;text-align:center">Data source: City of Toronto ArcGIS REST API — By-law 569-2013 zoning layers. Compliance checks are indicative; always verify with municipal planning staff.</div>';
+  html+='<div style="font-size:12px;color:#555;margin-top:12px;text-align:center">Data source: City of Toronto ArcGIS REST API — By-law 569-2013 zoning layers. Compliance checks are indicative; always verify with municipal planning staff.</div>';
 
   // After all checks (including angular planes), update the header score
   setTimeout(()=>{

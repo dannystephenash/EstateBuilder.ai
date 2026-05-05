@@ -9,14 +9,42 @@ function secCenter(){
   const lotMaxX=Math.max(...allX), lotMinX=Math.min(...allX);
   const maxZ=lotBounds().maxZ;
   let cx=0,cz=0,maxH=0,n=0;
+  // Auto-stack-aware so the camera frames towers sitting on podiums correctly,
+  // even when baseElevFt isn't explicitly set on the tower volume.
+  const _gfH_ft = (P.flr && P.flr.gf) || 15;
+  const _typH_ft = (P.flr && P.flr.typ) || 10;
+  function _polyAreaForCamera(vol){
+    if(vol.customAreaSF) return vol.customAreaSF;
+    if(vol.customPolyLocal && vol.customPolyLocal.length >= 3){
+      const r = vol.customPolyLocal; let a = 0;
+      for(let i = 0; i < r.length - 1; i++) a += r[i][0]*r[i+1][1] - r[i+1][0]*r[i][1];
+      return Math.abs(a/2);
+    }
+    return (vol.width||0) * (vol.depth||0);
+  }
+  // Approximate auto-stack: if a smaller-storey, larger-area volume exists, this
+  // volume is probably a tower stacked on it (matches buildSection3DModel logic).
+  function _autoBaseFt(vol){
+    if(vol.baseElevFt && vol.baseElevFt > 0.5) return vol.baseElevFt;
+    const myArea = _polyAreaForCamera(vol);
+    let podiumStoreys = 0;
+    P.vols.forEach(other => {
+      if(other === vol) return;
+      if((other.storeys || 0) >= (vol.storeys || 0)) return;
+      if(_polyAreaForCamera(other) <= myArea) return;
+      if(other.storeys > podiumStoreys) podiumStoreys = other.storeys;
+    });
+    return podiumStoreys > 0 ? _gfH_ft + (podiumStoreys - 1) * _typH_ft : 0;
+  }
   P.vols.forEach(vol=>{
     const oE=f2m(vol.offEast);
     const w=f2m(vol.width);
     const x1=f2m(lotMaxX)-oE, x0=x1-w;
     const z0=f2m(vol.startEg), z1=z0+f2m(vol.depth);
     cx+=(x0+x1)/2; cz+=(z0+z1)/2; n++;
-    const gfH=vol.commGF?f2m(P.flr.gf):f2m(P.flr.typ);
-    const h=gfH+(vol.storeys-1)*f2m(P.flr.typ);
+    const gfH = vol.commGF ? f2m(P.flr.gf) : f2m(P.flr.typ);
+    const yOffset = f2m(_autoBaseFt(vol));
+    const h = yOffset + gfH + (vol.storeys - 1) * f2m(P.flr.typ);
     if(h>maxH) maxH=h;
   });
   if(n>0){cx/=n;cz/=n;}
@@ -30,7 +58,7 @@ function buildCoreControls(){
   const maxX=Math.round(lotBounds().maxX+50);
   const maxZ=Math.round(lotBounds().maxZ+50);
   const minX=-50, minZ=-50;
-  const btnStyle='padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-weight:600';
+  const btnStyle='padding:2px 8px;border-radius:3px;cursor:pointer;font-size:13px;font-weight:600';
 
   function sliderRow(label,getX,getZ,setX,setZ,getA,setA,color){
     const d=document.createElement('div');
@@ -56,8 +84,8 @@ function buildCoreControls(){
     // Angle row
     if(getA){
       const ar=document.createElement('div');
-      ar.style.cssText='display:grid;grid-template-columns:90px 1fr 50px;gap:4px;align-items:center;margin-bottom:8px;font-size:10px';
-      ar.innerHTML=`<span style="color:#888;font-size:10px;padding-left:2px">↻ Angle</span>`;
+      ar.style.cssText='display:grid;grid-template-columns:90px 1fr 50px;gap:4px;align-items:center;margin-bottom:8px;font-size:13px';
+      ar.innerHTML=`<span style="color:#888;font-size:13px;padding-left:2px">↻ Angle</span>`;
       const sa=document.createElement('input');sa.type='range';sa.min=0;sa.max=359;sa.step=1;sa.value=getA();
       sa.style.cssText='width:100%;accent-color:'+color;
       const va=document.createElement('input');va.type='number';va.min=0;va.max=359;va.step=1;va.value=getA();
@@ -70,7 +98,7 @@ function buildCoreControls(){
   }
 
   // Header
-  el.innerHTML='<div style="display:grid;grid-template-columns:90px 1fr 50px 1fr 50px;gap:4px;font-size:9px;color:#777;margin-bottom:4px"><span></span><span style="text-align:center">← X (East-West) →</span><span>ft</span><span style="text-align:center">← Z (Egl→Lnk) →</span><span>ft</span></div>';
+  el.innerHTML='<div style="display:grid;grid-template-columns:90px 1fr 50px 1fr 50px;gap:4px;font-size:12px;color:#777;margin-bottom:4px"><span></span><span style="text-align:center">← X (East-West) →</span><span>ft</span><span style="text-align:center">← Z (Egl→Lnk) →</span><span>ft</span></div>';
 
   // ── ELEVATORS (clean header + add/remove, matches stairs pattern) ──
   const elevHeader=document.createElement('div');
@@ -99,9 +127,9 @@ function buildCoreControls(){
   if(C.numElevators>0){
     // Direction toggle row
     const dirRow=document.createElement('div');
-    dirRow.style.cssText='display:flex;gap:6px;margin:0 0 4px 90px;font-size:10px';
+    dirRow.style.cssText='display:flex;gap:6px;margin:0 0 4px 90px;font-size:13px';
     const dirLabel=document.createElement('span');
-    dirLabel.style.cssText='color:#888;font-size:10px;line-height:22px';
+    dirLabel.style.cssText='color:#888;font-size:13px;line-height:22px';
     dirLabel.textContent='Direction:';
     dirRow.appendChild(dirLabel);
     ['ew','ns'].forEach(d=>{
@@ -148,7 +176,7 @@ function buildCoreControls(){
       const delBtn=document.createElement('button');
       delBtn.textContent='✕';
       delBtn.title='Remove this stairwell';
-      delBtn.style.cssText='padding:1px 6px;border-radius:3px;border:1px solid #663333;background:#33111188;color:#ff6644;cursor:pointer;font-size:10px;font-weight:700;margin-left:auto';
+      delBtn.style.cssText='padding:1px 6px;border-radius:3px;border:1px solid #663333;background:#33111188;color:#ff6644;cursor:pointer;font-size:13px;font-weight:700;margin-left:auto';
       delBtn.onclick=()=>{
         C.stairs.splice(si,1);
         buildCoreControls();buildSection3DModel();updateSection3DStats();autoSave();
@@ -559,6 +587,27 @@ function buildSection3DModel(){
     return line;
   }
 
+  // ── BASE-ELEV-AWARE storey range (matches computeGFA / unit-mix) ──
+  // Without this, a Tower volume with baseElevFt=45 would be rendered starting
+  // at floor 1 — overlapping the Podium and producing a single monolithic
+  // block instead of the actual podium-on-bottom + tower-on-top massing.
+  const _gfH_ft = (P.flr && P.flr.gf) || 15;
+  const _typH_ft = (P.flr && P.flr.typ) || 10;
+  function _startStoreyForVol(vol){
+    if(!vol.baseElevFt || vol.baseElevFt <= 0.5) return 1;
+    return Math.max(1, Math.round((vol.baseElevFt - _gfH_ft) / _typH_ft) + 2);
+  }
+
+  // No auto-stack inference. The Section view uses each volume's explicit
+  // `baseElevFt` to determine its start storey — same rule as computeGFA and
+  // pfData. If the user wants a tower to start above the podium, they set
+  // baseElevFt explicitly. Otherwise both volumes start at storey 1 and overlap
+  // correctly (the section drawing handles the visual stacking via storey
+  // ranges + per-storey footprint width).
+  function _startStoreyForVolAuto(vol){
+    return _startStoreyForVol(vol);
+  }
+
   P.vols.forEach((vol,vi)=>{
     const hasComm=!!vol.commGF;
     const floorH=hasComm?gfH_m:typH_m;
@@ -584,12 +633,27 @@ function buildSection3DModel(){
       labelZ=z0+bd/2;
     }
 
+    // ── This volume's vertical offset from ground ──
+    // Use AUTO-detected start storey (handles "tower inside podium with more
+    // storeys" case even when baseElevFt isn't explicitly set).
+    const volStartStorey = _startStoreyForVolAuto(vol);
+    // Compute yOffset in metres from the start storey: floor 1 → 0, floor 2 → gfH,
+    // floor N → gfH + (N-2)*typH.
+    const yOffset_m = volStartStorey <= 1 ? 0 : (gfH_m + (volStartStorey - 2) * typH_m);
+
     for(let f=0;f<vol.storeys;f++){
-      const isGF=(f===0);
-      const flH=isGF?floorH:typH_m;
-      const yBase=isGF?0:(floorH+(f-1)*typH_m);
+      // f = local floor index within this volume (0-based)
+      // globalStorey = absolute storey in the project (1-based)
+      const globalStorey = volStartStorey + f;
+      // GF treatment ONLY applies to volumes that actually start at storey 1
+      // (a Tower starting at storey 5 does NOT have a "ground floor")
+      const isGF = (volStartStorey === 1) && (f === 0);
+      const flH = isGF ? floorH : typH_m;
+      // Vertical position: stack from this volume's baseElevFt, then add floor heights
+      const yBaseLocal = isGF ? 0 : (volStartStorey === 1 ? floorH + (f-1)*typH_m : f*typH_m);
+      const yBase = yOffset_m + yBaseLocal;
       const floorGap=0.08;
-      let isAmenityFloor=(f===1 && vol.storeys>3);
+      let isAmenityFloor=(f===1 && vol.storeys>3 && volStartStorey === 1);
       let color=COL_RESI;
       if(isGF && hasComm) color=COL_COMM;
       const slabThick=0.2;
@@ -624,12 +688,16 @@ function buildSection3DModel(){
         }
       }
 
-      // Collect floor info for unified labels (rendered once after all volumes)
+      // Collect floor info for unified labels (rendered once after all volumes).
+      // Key by GLOBAL storey so podium floor 4 + tower floor 1 don't collide
+      // (tower's local f=0 is global storey 5 if podium is 4 storeys).
       if(!sec3d._floorLabels) sec3d._floorLabels={};
-      const flKey=f;
-      if(!sec3d._floorLabels[flKey] || vol.storeys>=sec3d._floorLabels[flKey].maxStoreys){
-        const flLabel=isGF?(hasComm?'GF Comm.':'GF'):(isAmenityFloor?'F'+(f+1)+' Amen/Res':'F'+(f+1));
-        sec3d._floorLabels[flKey]={label:flLabel, yBase, flH, color, maxStoreys:vol.storeys};
+      const flKey = globalStorey;
+      const taller = (volStartStorey + vol.storeys - 1);
+      if(!sec3d._floorLabels[flKey] || taller >= sec3d._floorLabels[flKey].maxStoreys){
+        const flLabel = isGF ? (hasComm?'GF Comm.':'GF')
+                       : (isAmenityFloor?'F'+globalStorey+' Amen/Res':'F'+globalStorey);
+        sec3d._floorLabels[flKey]={label:flLabel, yBase, flH, color, maxStoreys: taller};
       }
     }
   });
@@ -696,7 +764,8 @@ function buildSection3DModel(){
   }
 
   // ── SHARED CORE: laid out to match L-shaped building ──
-  // Compute the full bounding box across ALL volumes
+  // Compute the full bounding box across ALL volumes — and the GLOBAL top
+  // storey (accounts for towers stacked on podiums via baseElevFt).
   let allCx0=Infinity,allCx1=-Infinity,allZ0=Infinity,allZ1=-Infinity;
   let maxStoreys=0, tallestHasComm=false;
   P.vols.forEach(vol=>{
@@ -709,7 +778,10 @@ function buildSection3DModel(){
     if(cx1v>allCx1) allCx1=cx1v;
     if(z0v<allZ0) allZ0=z0v;
     if(z1v>allZ1) allZ1=z1v;
-    if(vol.storeys>maxStoreys){maxStoreys=vol.storeys; tallestHasComm=!!vol.commGF;}
+    // Global top storey for this volume (start + height - 1) — auto-detected
+    const volStart = _startStoreyForVolAuto(vol);
+    const volTop = volStart + (vol.storeys||0) - 1;
+    if(volTop > maxStoreys){ maxStoreys = volTop; tallestHasComm = (volStart === 1) && !!vol.commGF; }
   });
   const fullW=allCx1-allCx0, fullD=allZ1-allZ0;
 
@@ -763,8 +835,15 @@ function buildSection3DModel(){
       const yBase=isGF?0:((tallestHasComm?gfH_m:typH_m)+(f-1)*typH_m);
       const fg=0.08;
 
+      // Storey is "active" if any volume actually exists at this global storey.
+      // f is 0-based here, global storey = f + 1. Use _startStoreyForVol to know
+      // each volume's real storey range so towers above podiums count correctly.
       let floorActive=false;
-      P.vols.forEach(vol=>{if(f<vol.storeys) floorActive=true;});
+      const _gs = f + 1;
+      P.vols.forEach(vol=>{
+        const ss = _startStoreyForVolAuto(vol);
+        if(_gs >= ss && _gs <= ss + (vol.storeys||0) - 1) floorActive = true;
+      });
       if(!floorActive) continue;
 
       // Elevator shafts — only render if numElev > 0
@@ -852,7 +931,7 @@ function updateSection3DStats(){
         <div style="color:#AEBC46;font-weight:700;font-size:14px">${Math.round(d.totalGFA).toLocaleString()} sf</div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:10px;margin-top:6px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:13px;margin-top:6px">
       <div style="background:#2D2D2D;padding:6px;border-radius:4px">
         <span style="color:#c49ade">■</span> ${P.core.numElevators||0} Elevator${(P.core.numElevators||0)!==1?'s':''}: <b>~${(P.core.numElevators||0)*70} sf/flr</b>
       </div>

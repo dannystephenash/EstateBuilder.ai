@@ -205,6 +205,10 @@ function smToggleParcelPicker(){
 }
 
 function smCancelMultiParcel(){
+  // Exit edit mode FIRST so its markers + state get cleaned up
+  if(typeof smParcelEditMode !== 'undefined' && smParcelEditMode){
+    if(typeof smExitParcelEditMode === 'function') smExitParcelEditMode();
+  }
   smParcelPickerActive=false;
   smMultiParcelMode=false;
   smSelectedParcels=[];
@@ -249,6 +253,7 @@ function smUpdateMultiParcelUI(){
   // Enable/disable merge & undo buttons + dynamic label
   const mergeBtn=document.getElementById('btn-merge-parcels');
   const undoBtn=document.getElementById('btn-undo-parcel');
+  const editBtn=document.getElementById('btn-edit-parcels');
   if(mergeBtn){
     if(count>=1){mergeBtn.style.opacity='1';mergeBtn.style.pointerEvents='auto';}
     else{mergeBtn.style.opacity='0.4';mergeBtn.style.pointerEvents='none';}
@@ -257,6 +262,11 @@ function smUpdateMultiParcelUI(){
   if(undoBtn){
     if(count>=1){undoBtn.style.opacity='1';undoBtn.style.pointerEvents='auto';}
     else{undoBtn.style.opacity='0.4';undoBtn.style.pointerEvents='none';}
+  }
+  if(editBtn){
+    // Edit Parcels needs at least 1 selection
+    if(count>=1){editBtn.style.opacity='1';editBtn.style.pointerEvents='auto';}
+    else{editBtn.style.opacity='0.4';editBtn.style.pointerEvents='none';}
   }
 
   // Render selected parcels list
@@ -307,6 +317,10 @@ function smRemoveParcel(idx){
   smSelectedParcels.splice(idx,1);
   smUpdateMultiParcelUI();
   smRenderMultiParcelPreview();
+  // If editing, refresh markers so they match the new parcel set
+  if(typeof smParcelEditMode !== 'undefined' && smParcelEditMode){
+    if(typeof smRenderParcelEditMarkers === 'function') smRenderParcelEditMarkers();
+  }
 }
 
 function smUndoLastParcel(){
@@ -315,6 +329,9 @@ function smUndoLastParcel(){
     smUpdateMultiParcelUI();
     smRenderMultiParcelPreview();
     smShowToast('Last parcel removed','#888');
+    if(typeof smParcelEditMode !== 'undefined' && smParcelEditMode){
+      if(typeof smRenderParcelEditMarkers === 'function') smRenderParcelEditMarkers();
+    }
   }
 }
 
@@ -730,9 +747,11 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   // Show attribution toast
   smShowToast('Parcel imported from '+serviceName+' · '+Math.round(areaSqFt).toLocaleString()+' sf','#AEBC46');
 
-  // Auto-detect zoning at parcel centroid
+  // Auto-detect zoning at parcel centroid - use detectZoningAuto when
+  // available so Mississauga (and any future jurisdiction) is supported.
   try{
-    detectZoning(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
+    var _zoneFn = (typeof window.detectZoningAuto === 'function') ? window.detectZoningAuto : detectZoning;
+    _zoneFn(P.siteCoords.lat,P.siteCoords.lng).then(zoning=>{
       P.zoning=zoning;
       if(zoning&&zoning.zone) smShowToast('Zoning detected: '+(zoning.zoneString||zoning.zone),'#4ecdc4');
       const zi=document.getElementById('zoning-info');
@@ -1126,4 +1145,381 @@ function smAutoSync(){
     void crossSum; // suppress unused-var in case of future linting
     return;
   }, 300);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+//  PARCEL EDIT MODE — drag vertices/edges, snap to neighbours, insert vertices
+// ═══════════════════════════════════════════════════════════════════════════════════
+//
+// Architecture:
+//   • smParcelEditMode flag indicates edit mode is active
+//   • smParcelEditMarkers — array of { type:'vertex'|'edge'|'insert', parcelIdx, vertexIdx, marker }
+//   • smParcelEditHistory — undo stack: array of deep snapshots of all parcel ringCoords
+//   • Snap distance: 5 ft (~1.524 m) — vertex moves snap to vertices/edges of OTHER selected
+//     parcels and surrounding city parcels (whatever's queryable on the map)
+//
+// Workflow:
+//   1. User clicks EDIT PARCELS — toggles smParcelEditMode on
+//   2. For each selected parcel, render:
+//        • Vertex handles (solid colored circles, draggable)
+//        • Edge handles (smaller hollow squares at midpoints, draggable to translate edge)
+//        • Insert handles (tiny "+" plus signs at edge midpoints — click to add vertex)
+//   3. While dragging, snap to nearest vertex/edge of any other parcel within tolerance
+//   4. On dragend, push to undo stack and refresh markers
+//   5. User clicks EDIT PARCELS again (now reads "DONE EDITING") — exit edit mode
+//   6. MERGE & APPLY uses the EDITED ringCoords (no extra step needed — the existing
+//      merge logic already reads ringCoords)
+
+let smParcelEditMode = false;
+let smParcelEditMarkers = [];
+let smParcelEditHistory = [];   // each entry: deep clone of all parcels' ringCoords
+const SM_PARCEL_SNAP_FT = 5;    // snap if within this many feet
+const SM_PARCEL_SNAP_M  = SM_PARCEL_SNAP_FT * 0.3048;
+const SM_PARCEL_SNAP_PX = 15;   // pixel-based snap threshold (zoom-independent)
+
+/** Pixel-distance between two [lng,lat] points using Mapbox project(). */
+function _snapDistPx(a, b){
+  if(!smMap) return Infinity;
+  var sa = smMap.project(a);
+  var sb = smMap.project(b);
+  var dx = sa.x - sb.x, dy = sa.y - sb.y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+/**
+ * Toggle parcel-edit mode on/off. When ON: vertex + edge + insert handles
+ * appear on every selected parcel; user can drag/click to reshape; edits
+ * snap to neighbouring parcel boundaries within ~5 ft.
+ */
+function smToggleParcelEditMode(){
+  if(!smMap){ smShowToast('Map not ready', '#c44'); return; }
+  if(!smSelectedParcels || smSelectedParcels.length === 0){
+    smShowToast('Pick at least one parcel first', '#c44'); return;
+  }
+  if(smParcelEditMode){ smExitParcelEditMode(); return; }
+
+  smParcelEditMode = true;
+  smParcelEditHistory = [];
+  smPushParcelEditHistory(); // baseline snapshot for first undo
+
+  const btn = document.getElementById('btn-edit-parcels');
+  if(btn){
+    btn.textContent = '✓ DONE EDITING';
+    btn.style.background = '#AEBC46';
+    btn.style.color = '#111';
+  }
+  const undoBtn = document.getElementById('btn-undo-parcel-edit');
+  if(undoBtn){ undoBtn.style.display = 'inline-block'; }
+
+  const instrEl = document.getElementById('sitemap-instructions');
+  if(instrEl){
+    instrEl.innerHTML = '<b style="color:#AEBC46">EDIT MODE</b> — drag vertices (circles) or edges (squares) · double-click a square to add a vertex · linked vertices move together';
+  }
+
+  smRenderParcelEditMarkers();
+}
+
+function smExitParcelEditMode(){
+  smParcelEditMode = false;
+  smClearParcelEditMarkers();
+  smParcelEditHistory = [];
+
+  const btn = document.getElementById('btn-edit-parcels');
+  if(btn){
+    btn.textContent = '✎ EDIT PARCELS';
+    btn.style.background = '#444';
+    btn.style.color = '#AEBC46';
+  }
+  const undoBtn = document.getElementById('btn-undo-parcel-edit');
+  if(undoBtn){ undoBtn.style.display = 'none'; }
+
+  const instrEl = document.getElementById('sitemap-instructions');
+  if(instrEl){
+    const c = smSelectedParcels.length;
+    instrEl.innerHTML = c > 1 ? c + ' parcels selected — click <b style="color:#AEBC46">MERGE & APPLY</b> when ready' : '1 parcel selected — click <b style="color:#AEBC46">APPLY PARCEL</b>';
+  }
+
+  // Update the parcel area totals + preview after potentially-edited rings
+  smRecalcParcelAreas();
+  smRenderMultiParcelPreview();
+  smUpdateMultiParcelUI();
+}
+
+function smClearParcelEditMarkers(){
+  smParcelEditMarkers.forEach(m => { try { m.marker.remove(); } catch(e){} });
+  smParcelEditMarkers = [];
+}
+
+function smPushParcelEditHistory(){
+  // Snapshot current ringCoords of every selected parcel — for undo
+  const snap = smSelectedParcels.map(p => p.ringCoords.map(v => [v[0], v[1]]));
+  smParcelEditHistory.push(snap);
+  // Cap history at 30 entries (memory)
+  if(smParcelEditHistory.length > 30) smParcelEditHistory.shift();
+}
+
+function smUndoParcelEdit(){
+  if(!smParcelEditMode){ smShowToast('Enter Edit mode first', '#c44'); return; }
+  if(smParcelEditHistory.length <= 1){
+    smShowToast('Nothing to undo', '#888');
+    return;
+  }
+  smParcelEditHistory.pop(); // remove current state
+  const prev = smParcelEditHistory[smParcelEditHistory.length - 1];
+  prev.forEach((ring, i) => {
+    if(smSelectedParcels[i]) smSelectedParcels[i].ringCoords = ring.map(v => [v[0], v[1]]);
+  });
+  smRefreshSelectedParcelGeoms();
+  smRenderMultiParcelPreview();
+  smRenderParcelEditMarkers();
+}
+
+/**
+ * Re-build geojsonFeature from the (possibly edited) ringCoords for every
+ * selected parcel. Called after any vertex/edge/insert edit.
+ */
+function smRefreshSelectedParcelGeoms(){
+  smSelectedParcels.forEach(p => {
+    if(!p.ringCoords || p.ringCoords.length < 3) return;
+    const closed = p.ringCoords.slice();
+    if(closed[0][0] !== closed[closed.length-1][0] || closed[0][1] !== closed[closed.length-1][1]){
+      closed.push([closed[0][0], closed[0][1]]);
+    }
+    try { p.geojsonFeature = turf.polygon([closed]); } catch(e){}
+  });
+}
+
+function smRecalcParcelAreas(){
+  smSelectedParcels.forEach(p => {
+    if(p.geojsonFeature){
+      try { p.areaSqFt = turf.area(p.geojsonFeature) * 10.7639; } catch(e){}
+    }
+  });
+}
+
+/**
+ * Snap a candidate point [lng,lat] to nearby parcel features. Returns the
+ * snapped point (or original if nothing in range). Considers vertices and
+ * edges of every OTHER selected parcel.
+ *
+ * @param {[number,number]} pt — candidate position in [lng,lat]
+ * @param {number} excludeParcelIdx — index in smSelectedParcels to skip (the one being edited)
+ * @returns {[number,number]} snapped or original point
+ */
+function smSnapToNeighbours(pt, excludeParcelIdx){
+  let bestPt = pt;
+  let bestD  = Infinity;
+
+  // Pass 1 — vertex-to-vertex (pixel-based threshold for zoom independence)
+  smSelectedParcels.forEach((p, pi) => {
+    if(pi === excludeParcelIdx) return;
+    p.ringCoords.forEach(v => {
+      const d = _snapDistPx(pt, v);
+      if(d < bestD && d < SM_PARCEL_SNAP_PX){
+        bestD = d; bestPt = [v[0], v[1]];
+      }
+    });
+  });
+  if(bestPt !== pt) return bestPt; // prefer vertex snap over edge snap
+
+  // Pass 2 — vertex-to-edge (pixel-based)
+  smSelectedParcels.forEach((p, pi) => {
+    if(pi === excludeParcelIdx) return;
+    const ring = p.ringCoords;
+    for(let j = 0; j < ring.length; j++){
+      const nj = (j + 1) % ring.length;
+      const cp = _closestPointOnSegment(pt, ring[j], ring[nj]);
+      const dpx = _snapDistPx(pt, cp.point);
+      if(dpx < bestD && dpx < SM_PARCEL_SNAP_PX){
+        bestD = dpx; bestPt = cp.point;
+      }
+    }
+  });
+  return bestPt;
+}
+
+/**
+ * Render all edit handles (vertex / edge-midpoint-drag / vertex-insert)
+ * for every selected parcel. Removes any existing markers first.
+ */
+function smRenderParcelEditMarkers(){
+  smClearParcelEditMarkers();
+  if(!smParcelEditMode) return;
+
+  const colors = ['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+
+  smSelectedParcels.forEach((parcel, pi) => {
+    const col = colors[pi % colors.length];
+    const ring = parcel.ringCoords;
+
+    // ── Vertex drag handles ──
+    ring.forEach((v, vi) => {
+      const el = document.createElement('div');
+      el.style.cssText = 'width:14px;height:14px;background:'+col+';border:2.5px solid #fff;border-radius:50%;cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,0.6);box-sizing:border-box';
+      el.title = 'Drag vertex (linked vertices from adjacent parcels move together)';
+      const m = new mapboxgl.Marker({ element: el, draggable: true, anchor: 'center' })
+        .setLngLat(v)
+        .addTo(smMap);
+
+      // Linked-vertex system: when dragging, coincident vertices from other parcels move together
+      let linkedVerts = null; // [{parcelIdx, vertexIdx}] — detected on dragstart
+
+      m.on('dragstart', () => {
+        // Find all vertices from OTHER parcels at the same position (within snap pixel threshold)
+        linkedVerts = [];
+        const myPos = parcel.ringCoords[vi];
+        smSelectedParcels.forEach((op, opi) => {
+          if(opi === pi) return;
+          op.ringCoords.forEach((ov, ovi) => {
+            if(_snapDistPx(myPos, ov) < SM_PARCEL_SNAP_PX){
+              linkedVerts.push({parcelIdx: opi, vertexIdx: ovi});
+            }
+          });
+        });
+      });
+
+      m.on('drag', () => {
+        const ll = m.getLngLat();
+        // Snap to neighbour parcels (excluding own parcel AND linked parcels)
+        const snapped = smSnapToNeighbours([ll.lng, ll.lat], pi);
+        const didSnap = (snapped[0] !== ll.lng || snapped[1] !== ll.lat);
+        const finalPos = didSnap ? snapped : [ll.lng, ll.lat];
+        if(didSnap) m.setLngLat(snapped);
+
+        // Update this vertex
+        parcel.ringCoords[vi] = [finalPos[0], finalPos[1]];
+        smLiveRedrawParcelOnly(pi);
+
+        // Move all linked (coincident) vertices from other parcels
+        if(linkedVerts && linkedVerts.length > 0){
+          linkedVerts.forEach(lv => {
+            smSelectedParcels[lv.parcelIdx].ringCoords[lv.vertexIdx] = [finalPos[0], finalPos[1]];
+            smLiveRedrawParcelOnly(lv.parcelIdx);
+          });
+          // Also reposition their markers so they visually follow
+          smParcelEditMarkers.forEach(em => {
+            if(em.type !== 'vertex') return;
+            for(let li = 0; li < linkedVerts.length; li++){
+              if(em.parcelIdx === linkedVerts[li].parcelIdx && em.vertexIdx === linkedVerts[li].vertexIdx){
+                em.marker.setLngLat(finalPos);
+                break;
+              }
+            }
+          });
+        }
+      });
+
+      m.on('dragend', () => {
+        linkedVerts = null;
+        smPushParcelEditHistory();
+        smRefreshSelectedParcelGeoms();
+        smRecalcParcelAreas();
+        smUpdateMultiParcelUI();
+        // Re-render markers so edge midpoints update to new positions
+        smRenderParcelEditMarkers();
+      });
+
+      smParcelEditMarkers.push({ type:'vertex', parcelIdx:pi, vertexIdx:vi, marker:m });
+    });
+
+    // ── Edge midpoint drag handles (translate entire edge) ──
+    for(let i = 0; i < ring.length; i++){
+      const j = (i + 1) % ring.length;
+      const a = ring[i], b = ring[j];
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+
+      const el = document.createElement('div');
+      el.style.cssText = 'width:11px;height:11px;background:transparent;border:2px solid '+col+';border-radius:2px;cursor:move;box-shadow:0 1px 3px rgba(0,0,0,0.6);box-sizing:border-box';
+      el.title = 'Drag to move edge · Double-click to insert vertex here';
+      const m = new mapboxgl.Marker({ element: el, draggable: true, anchor: 'center' })
+        .setLngLat(mid)
+        .addTo(smMap);
+
+      // Capture starting positions of the two endpoints
+      const startA = [a[0], a[1]];
+      const startB = [b[0], b[1]];
+      const startMid = [mid[0], mid[1]];
+
+      m.on('drag', () => {
+        const ll = m.getLngLat();
+        // Compute delta from drag start
+        let dLng = ll.lng - startMid[0];
+        let dLat = ll.lat - startMid[1];
+        // Tentative new endpoints
+        let newA = [startA[0] + dLng, startA[1] + dLat];
+        let newB = [startB[0] + dLng, startB[1] + dLat];
+        // Snap each endpoint independently
+        const snapA = smSnapToNeighbours(newA, pi);
+        const snapB = smSnapToNeighbours(newB, pi);
+        // If only A snapped, use A's snap delta and adjust B to maintain the original edge geometry
+        // (preferring snap-A wins so the edge stays attached to the neighbour)
+        const aSnapped = (snapA[0] !== newA[0] || snapA[1] !== newA[1]);
+        const bSnapped = (snapB[0] !== newB[0] || snapB[1] !== newB[1]);
+        if(aSnapped && !bSnapped){
+          const adjLng = snapA[0] - startA[0];
+          const adjLat = snapA[1] - startA[1];
+          newA = snapA;
+          newB = [startB[0] + adjLng, startB[1] + adjLat];
+          dLng = adjLng; dLat = adjLat;
+        } else if(bSnapped && !aSnapped){
+          const adjLng = snapB[0] - startB[0];
+          const adjLat = snapB[1] - startB[1];
+          newB = snapB;
+          newA = [startA[0] + adjLng, startA[1] + adjLat];
+          dLng = adjLng; dLat = adjLat;
+        } else if(aSnapped && bSnapped){
+          // Both snapped — accept (edge may rotate slightly to align with neighbour vertices)
+          newA = snapA; newB = snapB;
+        }
+        parcel.ringCoords[i] = newA;
+        parcel.ringCoords[j] = newB;
+        m.setLngLat([(newA[0] + newB[0])/2, (newA[1] + newB[1])/2]);
+        smLiveRedrawParcelOnly(pi);
+      });
+      m.on('dragend', () => {
+        smPushParcelEditHistory();
+        smRefreshSelectedParcelGeoms();
+        smRecalcParcelAreas();
+        smUpdateMultiParcelUI();
+        smRenderParcelEditMarkers();
+      });
+
+      // Double-click edge handle → insert a new vertex at the midpoint
+      const insertIdx = i;
+      el.addEventListener('dblclick', (ev) => {
+        ev.stopPropagation();
+        const newMid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const snapped = smSnapToNeighbours(newMid, pi);
+        parcel.ringCoords.splice(insertIdx + 1, 0, snapped);
+        smPushParcelEditHistory();
+        smRefreshSelectedParcelGeoms();
+        smRecalcParcelAreas();
+        smUpdateMultiParcelUI();
+        smLiveRedrawParcelOnly(pi);
+        smRenderParcelEditMarkers();
+      });
+
+      smParcelEditMarkers.push({ type:'edge', parcelIdx:pi, edgeIdx:i, marker:m });
+    }
+  });
+}
+
+/**
+ * Update only one parcel's preview source (during drag, no flicker on others).
+ * Called continuously during drag for smooth visual feedback.
+ */
+function smLiveRedrawParcelOnly(pi){
+  if(!smMap) return;
+  const p = smSelectedParcels[pi];
+  if(!p) return;
+  const ring = p.ringCoords.slice();
+  if(ring.length < 3) return;
+  if(ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]){
+    ring.push([ring[0][0], ring[0][1]]);
+  }
+  const feat = { type:'Feature', geometry:{ type:'Polygon', coordinates:[ring] }, properties:{} };
+  const sid = 'sm-multi-parcel-' + pi;
+  try {
+    if(smMap.getSource(sid)) smMap.getSource(sid).setData(feat);
+  } catch(e){}
 }

@@ -3700,4 +3700,449 @@ function smAutoSync(){
       return [Math.round(xFt), Math.round(zFt)];
     });
     let crossSum=0;
-    for(let i=0
+    for(let i=0;i<polyVerts.length;i++){
+      const j=(i+1)%polyVerts.length;
+      crossSum+=(polyVerts[j][0]-polyVerts[i][0])*(polyVerts[j][1]+polyVerts[i][1]);
+    }
+    if(crossSum<0) polyVerts.reverse();
+
+    const allX=polyVerts.map(v=>v[0]), allZ=polyVerts.map(v=>v[1]);
+    const minX=Math.min(...allX), maxX=Math.max(...allX);
+    const minZ=Math.min(...allZ), maxZ=Math.max(...allZ);
+    const lotWidth=maxX-minX, lotDepth=maxZ-minZ;
+
+    P.lot.polyVerts=polyVerts;
+    P.lot.front=Math.round(lotWidth);
+    P.lot.upperRight=Math.round(lotDepth*0.5);
+    P.lot.stepEast=0;
+    P.lot.lowerRight=Math.round(lotDepth*0.5);
+    P.lot.upperLeft=Math.round(lotDepth*0.7);
+    P.lot.notchWest=0;
+    P.lot.lowerLeft=Math.round(lotDepth*0.3);
+    P.lot.rear=Math.round(lotWidth);
+
+    // Sync volumes — convert customPoly (lng/lat) to local XY feet
+    P.vols=smVolumes.map(sv=>{
+      const xM=turf.distance(turf.point([originLng,originLat]),turf.point([sv.lngLat[0],originLat]),{units:'meters'});
+      const xFt=xM*3.28084*(sv.lngLat[0]>originLng?1:-1);
+      const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,sv.lngLat[1]]),{units:'meters'});
+      const zFt=zM*3.28084*(sv.lngLat[1]<originLat?1:-1);
+      const startEg=Math.max(0,Math.round(zFt-sv.depthFt/2));
+      const rightEdge=Math.round(xFt+sv.widthFt/2);
+      const offEast=Math.max(0,Math.round(maxX-rightEdge));
+
+      // Convert freeform polygon from lng/lat to local feet coordinates
+      let localPoly=null;
+      if(sv.customPoly&&sv.customPoly.length>=4){
+        localPoly=sv.customPoly.map(coord=>{
+          const pxM=turf.distance(turf.point([originLng,originLat]),turf.point([coord[0],originLat]),{units:'meters'});
+          const pxFt=pxM*3.28084*(coord[0]>originLng?1:-1);
+          const pzM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,coord[1]]),{units:'meters'});
+          const pzFt=pzM*3.28084*(coord[1]<originLat?1:-1);
+          return [Math.round(pxFt),Math.round(pzFt)];
+        });
+      }
+
+      const volObj={
+        storeys:sv.storeys, startEg:startEg, depth:sv.depthFt, width:sv.widthFt,
+        offEast:offEast, commGF:sv.commGF, color:sv.color, name:sv.name, angle:sv.angle,
+        windows:sv.windows, winSpacing:sv.winSpacing,
+        balconies:sv.balcFront||sv.balcBack||sv.balcLeft||sv.balcRight?1:0,
+        balcEvery:sv.balcEvery, balcDepth:sv.balcDepth,
+        balcFront:sv.balcFront, balcBack:sv.balcBack, balcLeft:sv.balcLeft, balcRight:sv.balcRight,
+        customPolyLocal:localPoly,
+        customAreaSF:sv.customAreaSF||0
+      };
+      return volObj;
+    });
+
+    // Save smVolumes GPS data for map restoration
+    P.smVolumesGPS=smVolumes.map(sv=>{
+      const gps={
+        id:sv.id,lngLat:sv.lngLat,widthFt:sv.widthFt,depthFt:sv.depthFt,
+        storeys:sv.storeys,angle:sv.angle,commGF:sv.commGF,color:sv.color,name:sv.name,
+        windows:sv.windows,winSpacing:sv.winSpacing,balcEvery:sv.balcEvery,balcDepth:sv.balcDepth,
+        balcFront:sv.balcFront,balcBack:sv.balcBack,balcLeft:sv.balcLeft,balcRight:sv.balcRight,
+        customPoly:sv.customPoly,customAreaSF:sv.customAreaSF,
+        shapeType:sv.shapeType||null,shapeParams:sv.shapeParams?{...sv.shapeParams}:null
+      };
+      return gps;
+    });
+
+    // Rebuild downstream tabs silently
+    try{
+      buildLotPanel();
+      buildVolPanel();
+      rebuildAll();
+    }catch(e){
+      console.error('Auto-sync error:',e);
+      // XSS-safe: escape error message before injecting as HTML.
+      var _safeErr = String(e && e.message || 'Unknown').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      dbg.innerHTML+='<br><span style="color:red">ERROR: '+_safeErr+'</span>';
+    }
+  },300); // 300ms debounce
+}
+
+/**
+ * Syncs the site map lot and all building volumes to the 3D massing engine,
+ * converting GPS coordinates to local feet and creating volumetric shapes.
+ */
+function smSyncTo3D(){
+  if(!smLotData){alert('Draw a lot first');return;}
+  if(smVolumes.length===0){alert('Add at least one building volume');return;}
+
+  // Apply lot polygon to massing (same as sitemapApplyToMassing but preserve volumes)
+  const verts=smLotData.vertices;
+  let originIdx=0;
+  verts.forEach((v,i)=>{ if(v[1]>verts[originIdx][1]) originIdx=i; });
+  const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
+  const polyVerts=verts.map(v=>{
+    const xM=turf.distance(turf.point([originLng,originLat]),turf.point([v[0],originLat]),{units:'meters'});
+    const xFt=xM*3.28084*(v[0]>originLng?1:-1);
+    const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,v[1]]),{units:'meters'});
+    const zFt=zM*3.28084*(v[1]<originLat?1:-1);
+    return [Math.round(xFt), Math.round(zFt)];
+  });
+  let crossSum=0;
+  for(let i=0;i<polyVerts.length;i++){
+    const j=(i+1)%polyVerts.length;
+    crossSum+=(polyVerts[j][0]-polyVerts[i][0])*(polyVerts[j][1]+polyVerts[i][1]);
+  }
+  if(crossSum<0) polyVerts.reverse();
+
+  const allX=polyVerts.map(v=>v[0]), allZ=polyVerts.map(v=>v[1]);
+  const minX=Math.min(...allX), maxX=Math.max(...allX);
+  const minZ=Math.min(...allZ), maxZ=Math.max(...allZ);
+
+  P.lot={
+    polyVerts: polyVerts,
+    front: maxX-minX,
+    upperRight: Math.round((maxZ-minZ)*0.5),
+    stepEast: 0,
+    lowerRight: Math.round((maxZ-minZ)*0.5),
+    upperLeft: Math.round((maxZ-minZ)*0.7),
+    notchWest: 0,
+    lowerLeft: Math.round((maxZ-minZ)*0.3),
+    rear: maxX-minX
+  };
+
+  // Convert map volumes to 3D massing volumes (including freeform polygons)
+  P.vols=smVolumes.map(sv=>{
+    const xM=turf.distance(turf.point([originLng,originLat]),turf.point([sv.lngLat[0],originLat]),{units:'meters'});
+    const xFt=xM*3.28084*(sv.lngLat[0]>originLng?1:-1);
+    const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,sv.lngLat[1]]),{units:'meters'});
+    const zFt=zM*3.28084*(sv.lngLat[1]<originLat?1:-1);
+    const startEg=Math.max(0,Math.round(zFt-sv.depthFt/2));
+    const rightEdge=Math.round(xFt+sv.widthFt/2);
+    const offEast=Math.max(0,Math.round(maxX-rightEdge));
+
+    // Convert freeform polygon from lng/lat to local feet coordinates
+    let localPoly=null;
+    if(sv.customPoly&&sv.customPoly.length>=4){
+      localPoly=sv.customPoly.map(coord=>{
+        const pxM=turf.distance(turf.point([originLng,originLat]),turf.point([coord[0],originLat]),{units:'meters'});
+        const pxFt=pxM*3.28084*(coord[0]>originLng?1:-1);
+        const pzM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,coord[1]]),{units:'meters'});
+        const pzFt=pzM*3.28084*(coord[1]<originLat?1:-1);
+        return [Math.round(pxFt),Math.round(pzFt)];
+      });
+    }
+
+    return {
+      storeys:sv.storeys, startEg:startEg, depth:sv.depthFt, width:sv.widthFt,
+      offEast:offEast, commGF:sv.commGF, color:sv.color, name:sv.name, angle:sv.angle,
+      windows:sv.windows||1, winSpacing:sv.winSpacing||3,
+      balconies:sv.balcFront||sv.balcBack||sv.balcLeft||sv.balcRight?1:0,
+      balcEvery:sv.balcEvery||2, balcDepth:sv.balcDepth||4,
+      balcFront:sv.balcFront, balcBack:sv.balcBack, balcLeft:sv.balcLeft, balcRight:sv.balcRight,
+      customPolyLocal:localPoly,
+      customAreaSF:sv.customAreaSF||0
+    };
+  });
+
+  // Rebuild 3D
+  buildLotPanel();
+  buildSetbackPanel();
+  buildFloorPanel();
+  buildVolPanel();
+  rebuildAll();
+  switchTab('massing');
+}
+
+function sitemapExport(){
+  if(!smLotData)return;
+  const obj={project:'OleaDev Site Analysis',timestamp:new Date().toISOString(),
+    lot:{areaSqFt:Math.round(smLotData.areaSqFt),areaSqM:Math.round(smLotData.areaSqM),shape:smLotData.shape},
+    edges:smLotData.edges.map(e=>({id:e.id,lengthFt:+e.lengthFt.toFixed(1),compass:e.compass})),
+    vertices:smLotData.vertices.map((v,i)=>({id:'V'+(i+1),lat:+v[1].toFixed(6),lng:+v[0].toFixed(6)})),
+    geojson:smLotData.geometry};
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='oleadev-lot-'+Date.now()+'.json';a.click();
+}
+function sitemapCopy(){
+  if(!smLotData)return;
+  let t='OleaDev Lot Analysis\nArea: '+Math.round(smLotData.areaSqFt).toLocaleString()+' sf\n\nEdges:\n';
+  smLotData.edges.forEach(e=>{t+='  '+e.id+': '+e.lengthFt.toFixed(1)+"' — "+e.compass+'\n';});
+  navigator.clipboard.writeText(t);
+}
+/**
+ * SIMPLEST POSSIBLE CLEAR — wipes localStorage and reloads the page.
+ * This is bulletproof: a page reload starts the app in its initial empty state,
+ * so there is no possible code path where the lot survives.
+ *
+ * Why this works (and the previous "comprehensive" approach didn't):
+ *  - Page reload re-initializes EVERY module from scratch (P.* defaults, smMap fresh)
+ *  - Wiping AUTOSAVE_KEY before reload prevents autoLoad from restoring the lot
+ *  - Mapbox tokens, asset class, and other non-lot settings persist (different keys)
+ *  - No custom layer or marker can survive — they're all destroyed when the map
+ *    instance is destroyed, which happens automatically on reload
+ *
+ * Logs every step to console for diagnosis. Toast appears briefly before reload.
+ */
+function sitemapClear(){
+  if(!confirm('Clear the lot and all buildings? This cannot be undone.'))return;
+
+  console.group('[sitemapClear] WIPE + RELOAD');
+
+  // ── Step 0: Wipe the autosave so reload doesn't restore the lot ──
+  // This is the CRITICAL step — must happen BEFORE the reload fires.
+  try {
+    if(typeof AUTOSAVE_KEY !== 'undefined'){
+      localStorage.removeItem(AUTOSAVE_KEY);
+      console.log('  ✓ Removed AUTOSAVE_KEY from localStorage');
+    } else {
+      // Fallback: blast both common keys in case AUTOSAVE_KEY isn't in scope
+      try { localStorage.removeItem('oleadev_autosave'); } catch(e){}
+      try { localStorage.removeItem('estatebuilder_autosave'); } catch(e){}
+      console.log('  ⓘ AUTOSAVE_KEY not in scope — used fallback key names');
+    }
+  } catch(e){ console.warn('  ✗ localStorage wipe:', e.message); }
+
+  // ── Step 0b: Cancel any pending debounced autoSave that might re-write old state ──
+  try {
+    if(typeof _autoSaveTimer !== 'undefined' && _autoSaveTimer){
+      clearTimeout(_autoSaveTimer);
+      console.log('  ✓ Cancelled pending autoSave timer');
+    }
+  } catch(e){}
+
+  // ── Step 1: Show user feedback (visible briefly before reload) ──
+  try {
+    if(typeof smShowToast === 'function'){
+      smShowToast('✓ Clearing... reloading page', '#AEBC46');
+    }
+  } catch(e){}
+
+  // ── Step 2: Reload the page after a short delay so toast is visible ──
+  // Page reload guarantees a clean slate. autoLoad will read empty localStorage
+  // and the app will initialize with default empty state.
+  console.log('  → Reloading page in 200ms for guaranteed clean slate');
+  console.groupEnd();
+  setTimeout(function(){
+    try { window.location.reload(); }
+    catch(e){
+      // Ultimate fallback if reload throws (extremely rare)
+      console.error('reload failed, falling back to navigation:', e);
+      try { window.location.href = window.location.pathname; } catch(e2){}
+    }
+  }, 200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Legacy in-memory clearing function — preserved as a fallback that other
+// modules can call directly if they ever need to clear without reloading.
+// ─────────────────────────────────────────────────────────────────────────
+function _sitemapClearInMemory(){
+
+  // ── Step 1: Cancel in-flight async fetches ──
+  try {
+    if(typeof window._lotFetchToken === 'undefined') window._lotFetchToken = 0;
+    window._lotFetchToken++;
+    console.log('  1. ✓ Cancelled in-flight fetches (token='+window._lotFetchToken+')');
+  } catch(e){ console.warn('  1. ✗ token bump:', e.message); }
+
+  // ── Step 2: Exit drawing modes + clear Mapbox Draw ──
+  try {
+    if(typeof smDraw !== 'undefined' && smDraw && typeof smDraw.deleteAll === 'function') smDraw.deleteAll();
+    if(typeof smClearMarkers === 'function') smClearMarkers();
+    smLotData = null;
+    if(typeof smCancelLotDraw === 'function'){ try { smCancelLotDraw(); } catch(e){} }
+    if(typeof smExitEditLot === 'function'){ try { smExitEditLot(); } catch(e){} }
+    if(typeof smExitShapeEdit === 'function'){ try { smExitShapeEdit(); } catch(e){} }
+    console.log('  2. ✓ Exited draw modes + cleared Mapbox Draw');
+  } catch(e){ console.warn('  2. ✗ draw exit:', e.message); }
+
+  // ── Step 3: Remove every building marker DOM element (mapboxgl.Marker divs) ──
+  try {
+    let markerCount = 0;
+    if(typeof smVolumes !== 'undefined' && Array.isArray(smVolumes)){
+      smVolumes.forEach(vol => {
+        try { if(vol.marker && vol.marker.remove){ vol.marker.remove(); markerCount++; } } catch(e) {}
+        if(vol._dragRaf){ try { cancelAnimationFrame(vol._dragRaf); } catch(e) {} }
+      });
+    }
+    console.log('  3. ✓ Removed '+markerCount+' building marker(s) from DOM');
+  } catch(e){ console.warn('  3. ✗ markers:', e.message); }
+
+  // ── Step 4: Reset all module-level + project state ──
+  try {
+    smVolumes = []; smSelectedVolId = null; smVolNextId = 1;
+    if(typeof smSelectedParcels !== 'undefined') smSelectedParcels = [];
+    P.lot.polyVerts = null;
+    P.lot.gpsVerts = null;
+    P.lot.front=60; P.lot.upperRight=80; P.lot.stepEast=0;
+    P.lot.lowerRight=80; P.lot.upperLeft=80; P.lot.notchWest=0;
+    P.lot.lowerLeft=80; P.lot.rear=60;
+    P.vols = [];
+    P.siteCoords = null;
+    P.siteAddress = '';
+    P.zoning = null;
+    P.comparables = [];
+    P.smVolumesGPS = null;
+    P.projectName = 'Untitled Project';
+    console.log('  4. ✓ Reset P.lot / P.vols / smVolumes / P.zoning to defaults');
+  } catch(e){ console.warn('  4. ✗ state reset:', e.message); }
+
+  // ── Step 5: Force IMMEDIATE save (synchronous, NO debounce) ──
+  // CRITICAL: do this BEFORE the map style reset so even if reset takes a moment
+  // and the page is somehow reloaded mid-reset, the saved state is already cleared.
+  try {
+    if(typeof getState === 'function' && typeof AUTOSAVE_KEY !== 'undefined'){
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(getState()));
+      console.log('  5. ✓ Saved cleared state DIRECTLY to localStorage (synchronous)');
+    } else if(typeof _autoSaveNow === 'function'){
+      _autoSaveNow();
+      console.log('  5. ✓ Called _autoSaveNow() to flush save');
+    } else if(typeof autoSave === 'function'){
+      autoSave();
+      console.log('  5. ⓘ Called autoSave() (debounced)');
+    }
+  } catch(e){ console.warn('  5. ✗ save:', e.message); }
+
+  // ── Step 6: NUCLEAR map reset — re-load the satellite style entirely ──
+  // This is the bulletproof step. setStyle() removes ALL custom layers/sources from
+  // the map and re-loads the base style. No matter what custom layers we missed,
+  // they're gone after this. We then re-attach event handlers when 'style.load' fires.
+  if(typeof smMap !== 'undefined' && smMap){
+    try {
+      const currentCenter = smMap.getCenter();
+      const currentZoom = smMap.getZoom();
+      const currentBearing = smMap.getBearing();
+      const currentPitch = smMap.getPitch();
+      // Mapbox style URLs we use:
+      //   satellite-streets-v12 (default)
+      //   streets-v12, dark-v11, etc.
+      const styleUrl = (typeof smStyle !== 'undefined' && smStyle === 'streets')
+        ? 'mapbox://styles/mapbox/streets-v12'
+        : 'mapbox://styles/mapbox/satellite-streets-v12';
+      smMap.setStyle(styleUrl);
+      console.log('  6. ✓ Reset map style — every custom layer wiped');
+      // After style reload, re-attach map handlers (drawing, edits, etc.) if needed.
+      smMap.once('style.load', () => {
+        try {
+          // Restore camera position
+          smMap.jumpTo({ center: currentCenter, zoom: currentZoom, bearing: currentBearing, pitch: currentPitch });
+          smMap.triggerRepaint();
+          console.log('  6b. ✓ Restored map camera + repainted');
+        } catch(e){ console.warn('  6b. ✗ camera restore:', e.message); }
+      });
+    } catch(e){
+      console.warn('  6. ✗ setStyle failed:', e.message, '— falling back to layer-by-layer removal');
+      // Fallback: layer-by-layer removal as before
+      try {
+        const style = smMap.getStyle();
+        if(style && style.layers){
+          for(let li = style.layers.length - 1; li >= 0; li--){
+            const lid = style.layers[li].id;
+            if((/^sm-/.test(lid) || /^smvol-/.test(lid) || /^saved-lot/.test(lid)) && lid !== 'zoning-wms'){
+              try { smMap.removeLayer(lid); } catch(e2){}
+            }
+          }
+        }
+        if(style && style.sources){
+          Object.keys(style.sources).forEach(sid => {
+            if((/^sm-/.test(sid) || /^smvol-/.test(sid) || /^saved-lot/.test(sid)) && sid !== 'zoning-wms'){
+              try { smMap.removeSource(sid); } catch(e2){}
+            }
+          });
+        }
+        try { smMap.triggerRepaint(); } catch(e2){}
+        console.log('  6c. ✓ Fallback layer removal completed');
+      } catch(e3){ console.warn('  6c. ✗ fallback also failed:', e3.message); }
+    }
+  } else {
+    console.log('  6. ⓘ smMap not initialized — skipping map reset');
+  }
+
+  // ── Step 7: Reset sidebar UI ──
+  try {
+    const lotInfo = document.getElementById('sitemap-lot-info');
+    if(lotInfo) lotInfo.style.display = 'none';
+    const zi = document.getElementById('zoning-info');
+    if(zi){ zi.style.display = 'none'; zi.innerHTML = ''; }
+    const clearLotBtn = document.getElementById('btn-clear-lot');
+    if(clearLotBtn) clearLotBtn.style.display = 'none';
+    const volPanel = document.getElementById('sm-vol-panel');
+    if(volPanel) volPanel.innerHTML = '';
+    const statsBar = document.getElementById('sm-vol-stats');
+    if(statsBar) statsBar.innerHTML = '';
+    const multiBar = document.getElementById('sm-multi-parcel-bar');
+    if(multiBar) multiBar.style.display = 'none';
+    const titleEl = document.getElementById('project-title');
+    if(titleEl) titleEl.textContent = 'Untitled Project';
+    const nameInput = document.getElementById('project-name');
+    if(nameInput) nameInput.value = 'Untitled Project';
+    document.title = 'OleaDev — Untitled Project';
+    if(typeof updateOptimalMassingButton === 'function') updateOptimalMassingButton();
+    console.log('  7. ✓ Reset sidebar UI');
+  } catch(e){ console.warn('  7. ✗ ui reset:', e.message); }
+
+  // ── Step 8: Rebuild 3D scene + sidebar panels ──
+  try {
+    if(typeof buildLotPanel === 'function') buildLotPanel();
+    if(typeof buildVolPanel === 'function') buildVolPanel();
+    if(typeof rebuildAll === 'function') rebuildAll();
+    console.log('  8. ✓ Rebuilt 3D scene');
+  } catch(e){ console.warn('  8. ✗ rebuild:', e.message); }
+
+  // ── Step 9: User-visible confirmation toast ──
+  try {
+    if(typeof smShowToast === 'function'){
+      smShowToast('✓ Lot cleared — ready for a new site', '#AEBC46');
+    }
+  } catch(e){}
+  console.log('✓ NUCLEAR CLEAR COMPLETE');
+  console.groupEnd();
+}
+// Expose globally as a backup against any later code that might shadow it
+try { window.sitemapClear = sitemapClear; } catch(e) {}
+
+// ── Defensive: bind the clear button via addEventListener too ──
+// The button has an inline onclick="sitemapClear()" but if anything goes wrong with
+// the inline handler (CSP, browser extension blocking inline JS, stale cache, etc.),
+// this addEventListener gives a second pathway to trigger the clear. Both call the
+// same function so it's safe to fire either or both.
+function _smBindClearBtn(){
+  const btn = document.getElementById('btn-clear-lot');
+  if(!btn) return false;
+  if(btn._clearBound) return true;        // already bound — don't double-bind
+  btn._clearBound = true;
+  btn.addEventListener('click', function(ev){
+    // If inline onclick already fired, this listener will fire too — that's fine,
+    // confirm() will guard against a double-clear.
+    try { sitemapClear(); } catch(e) { console.error('[clear] handler error:', e); }
+  });
+  console.log('[sitemapClear] Backup click listener bound to #btn-clear-lot');
+  return true;
+}
+// Try binding immediately + on DOMContentLoaded + a delayed retry, so we catch
+// the button no matter when the DOM finishes loading.
+if(document.readyState !== 'loading'){ _smBindClearBtn(); }
+else { document.addEventListener('DOMContentLoaded', _smBindClearBtn); }
+setTimeout(_smBindClearBtn, 500);
+setTimeout(_smBindClearBtn, 2000);
+
+// ═══════════════════════════════════════════════════════════
+//  AI INSIGHTS — Client-Side Direct API
+// ═══════════════════════════════════════════════════════════
+
