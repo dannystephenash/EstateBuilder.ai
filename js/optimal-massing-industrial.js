@@ -1,4 +1,4 @@
-// cache-buster: 20260506b
+// cache-buster: 20260506c
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -524,16 +524,18 @@
     } catch(e){ console.warn('[Industrial post-render] error:', e && e.message); }
   }
 
-  if(typeof window !== 'undefined'){
-    var _origRA1 = window.rebuildAll;
-    if(typeof _origRA1 === 'function'){
-      window.rebuildAll = function(){
-        var r = _origRA1.apply(this, arguments);
-        try { _industrialPostRender(); } catch(e){}
-        return r;
-      };
+  // Register as postRebuild hook (synchronous after rebuild). Migrated
+  // from rebuildAll wrapper to hook registry. Priority 50 = mid-range; the
+  // hook runs after rebuild completes but before the postRender timers.
+  function _registerPostRender(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerPostRender, 50);
+      return;
     }
+    window.registerRebuildHook('postRebuild', 'industrialPostRender',
+      function(){ try { _industrialPostRender(); } catch(e){} }, 50);
   }
+  _registerPostRender();
 
   // ── Coverage slider hook ───────────────────────────────────────────────
   // Exposes INDUSTRIAL.coverageRatio to the side-panel slider. The slider
