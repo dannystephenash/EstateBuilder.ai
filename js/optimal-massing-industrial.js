@@ -1,4 +1,4 @@
-// cache-buster: 20260506d
+// cache-buster: 20260506e
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -1468,11 +1468,154 @@
         }
       } catch(_eRtu){ console.warn('[Industrial decor RTU] error:', _eRtu && _eRtu.message); }
 
-      // ─── 3) OFFICE — REMOVED ENTIRELY ───────────────────────────────────
-      //    No glass panel, no mullions, no canopy, no projecting cube. The
-      //    warehouse facade is 100 % uniform IMP cladding. User asked to
-      //    REMOVE the office component entirely — restore later as a flush
-      //    material zone (no projecting geometry) if requested.
+      // ─── 3) OFFICE BAY — flush 2-storey curtain wall on parking-side face ─
+      //    Glass curtain wall section embedded in the warehouse front wall.
+      //    EXPLICITLY ZERO PROJECTION: glass, mullions, and frame band all
+      //    sit at the wall surface (5–10 mm outboard only to avoid Z-fight).
+      //    Reads as a proper office entry from any viewing angle, including
+      //    rotated lots — no detached cube, no floating awning.
+      //
+      //    Layers (each ≤ 1cm outboard of wall):
+      //      • Glass pane              (dark blue curtain wall)
+      //      • Vertical mullions       (white aluminium, every 5 ft)
+      //      • Horizontal floor line   (single mullion at 14 ft)
+      //      • Top frame band          (thin dark band, 6" tall, at 28 ft)
+      //      • Sill band               (matching dark band, 6" tall, at base)
+      //      • Door indication         (4 ft × 7 ft darker pane at 35% across)
+      //      • Door lintel             (4 ft horizontal mullion above door)
+      try {
+        // ── Dimensions ─────────────────────────────────────────────────
+        // Glass width: 50 ft default, capped at 40 % of the office-face
+        // wall length so it never dominates short walls. Min 20 ft.
+        var glassWFt = Math.min(50, (longAxisIsX ? whW : whD) * 0.40);
+        glassWFt = Math.max(20, glassWFt);
+        var glassHFt = 28;         // 2 storeys × 14 ft
+        var floorLineFt = 14;      // floor between 1st + 2nd storey
+        var mullionSpacingFt = 5;  // vertical mullions every 5 ft
+        var insetFt = 10;          // glass set 10 ft in from the corner
+
+        var glassW = _ftToM(glassWFt);
+        var glassH = _ftToM(glassHFt);
+        var glassY = glassH / 2;   // base at grade
+
+        // ── Wall offsets (all measured outboard of the wall surface) ──
+        // Carefully ordered so layers stack visually from inside out:
+        //   wall → glass (5mm) → mullions (8mm) → frame band (10mm) → door (12mm)
+        var SKIN_OFF    = 0.005;
+        var MULLION_OFF = 0.008;
+        var FRAME_OFF   = 0.010;
+        var DOOR_OFF    = 0.012;
+
+        // ── Where on the building does the office go? ─────────────────
+        // longAxisIsX  → north face (parking side, low Z)
+        // !longAxisIsX → west face  (parking side, low X)
+        var officeFace = longAxisIsX ? 'N' : 'W';
+        var glassCx, glassCz;
+        if(officeFace === 'N'){
+          glassCx = minXm + _ftToM(insetFt) + glassW / 2;
+          glassCz = minZm;
+        } else {
+          glassCx = minXm;
+          glassCz = minZm + _ftToM(insetFt) + glassW / 2;
+        }
+
+        // ── Helper: place a mesh on the office face. ──────────────────
+        //   axisOff = additional outboard distance beyond SKIN_OFF (use
+        //             FRAME_OFF/MULLION_OFF/DOOR_OFF to control layer)
+        //   alongOff = horizontal offset from the glass centre, along the
+        //              wall axis (positive = away from the corner)
+        //   vertOff  = vertical offset from glass centre
+        //
+        // ROTATION FIX: previous attempt used rotation.y = +π/2 for the
+        // W face, which faces +X (into the warehouse). Correct value is
+        // -π/2, which faces -X (outward, toward the parking lot).
+        function _placeOfficeMesh(geo, mat, axisOff, alongOff, vertOff){
+          var mesh = new THREE.Mesh(geo, mat);
+          if(officeFace === 'N'){
+            mesh.position.set(glassCx + alongOff, glassY + vertOff, glassCz - SKIN_OFF - axisOff);
+            mesh.rotation.y = Math.PI;          // normal → -Z (outward, north)
+          } else {
+            mesh.position.set(glassCx - SKIN_OFF - axisOff, glassY + vertOff, glassCz + alongOff);
+            mesh.rotation.y = -Math.PI / 2;     // normal → -X (outward, west)
+          }
+          return mesh;
+        }
+
+        // 1) Glass pane (the main visible element)
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(glassW, glassH),
+          _matGlassCW,
+          0, 0, 0
+        ));
+
+        // 2) Vertical mullions every 5 ft, full glass height
+        var mullionW = 0.04;       // 4 cm wide
+        var vSpacing = _ftToM(mullionSpacingFt);
+        var vCount = Math.max(2, Math.floor(glassW / vSpacing));
+        for(var mi = 0; mi <= vCount; mi++){
+          var vOff = -glassW / 2 + (mi * vSpacing);
+          if(vOff > glassW / 2) vOff = glassW / 2;
+          dg.add(_placeOfficeMesh(
+            new THREE.PlaneGeometry(mullionW, glassH),
+            _matMullion,
+            MULLION_OFF, vOff, 0
+          ));
+        }
+
+        // 3) Horizontal floor line at 14 ft — single horizontal mullion
+        var floorOffsetFromCentre = _ftToM(floorLineFt) - glassY;
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(glassW, mullionW),
+          _matMullion,
+          MULLION_OFF, 0, floorOffsetFromCentre
+        ));
+
+        // 4 + 5) Frame bands at top (28 ft) and bottom (grade) — thin dark
+        // horizontal strips that "frame" the glass against the IMP wall.
+        var frameH = _ftToM(0.5);   // 6 inches
+        var frameMat = new THREE.MeshStandardMaterial({
+          color: 0x2a2c30, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide
+        });
+        // Top band — sits at glass top, bottom 6" of band at glassH
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(glassW, frameH),
+          frameMat,
+          FRAME_OFF, 0, glassH / 2 - frameH / 2
+        ));
+        // Sill band — sits at base, top 6" of band at grade
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(glassW, frameH),
+          frameMat,
+          FRAME_OFF, 0, -glassH / 2 + frameH / 2
+        ));
+
+        // 6) Door indication — a 4 ft × 7 ft darker glass panel at 35 %
+        //    across the bay. Reads as the entrance from any angle. No
+        //    handle, no mullion frame around it (the surrounding vertical
+        //    mullions already imply the frame).
+        var doorWm = _ftToM(4);
+        var doorHm = _ftToM(7);
+        var doorOffsetX = -glassW / 2 + glassW * 0.35;
+        var doorMat = new THREE.MeshStandardMaterial({
+          color: 0x10141c, roughness: 0.18, metalness: 0.7, side: THREE.DoubleSide,
+          transparent: true, opacity: 0.95
+        });
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(doorWm, doorHm),
+          doorMat,
+          DOOR_OFF, doorOffsetX, -glassH / 2 + doorHm / 2
+        ));
+
+        // 7) Door lintel — a horizontal mullion at 7 ft above grade,
+        //    spans 4 ft (door width + a bit). Visually terminates the
+        //    door from the curtain wall above.
+        var lintelW = _ftToM(4.5);
+        dg.add(_placeOfficeMesh(
+          new THREE.PlaneGeometry(lintelW, mullionW * 1.5),
+          _matMullion,
+          DOOR_OFF + 0.001, doorOffsetX, -glassH / 2 + doorHm
+        ));
+      } catch(_eOffice){ console.warn('[Industrial office bay] error:', _eOffice && _eOffice.message); }
 
       // ════════════════════════════════════════════════════════════════════
       //  EXTENDED INDUSTRIAL FEATURES
