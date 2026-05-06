@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EstateBuilder.ai — Real-Estate Development Feasibility, Computed in Your Browser</title>
+<meta name="description" content="Site mapping, 3D massing, full pro-forma, and branded PDF reports — in a single tool that runs locally in your browser. No server, no signup.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     MASTHEAD — newspaper-style top strip with vol/date/CTAs
+     ───────────────────────────────────────────────────────────────────── -->
+<header class="masthead">
+  <div class="masthead-row">
+    <div class="masthead-brand">
+      <span class="brand-mark">EstateBuilder.ai</span>
+    </div>
+    <div class="masthead-meta">
+      <span>Vol.&nbsp;I, No.&nbsp;1</span>
+      <span class="dot">·</span>
+      <span id="dateLine">Toronto · Spring 2026</span>
+    </div>
+    <nav class="masthead-nav">
+      <a href="../estatebuilder-ai.html" class="nav-link nav-cta">Open the tool <span aria-hidden="true">↗</span></a>
+      <a href="https://github.com/dannystephenash/EstateBuilder.ai" class="nav-link">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     HERO — split: editorial headline + isometric massing diagram
+     ───────────────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="hero-grid">
+
+    <div class="hero-text">
+      <p class="kicker">Feature · Pre-Development Tooling</p>
+      <h1 class="hero-h1">
+        <span class="line">Real&nbsp;estate</span>
+        <span class="line">development</span>
+        <span class="line">feasibility,</span>
+        <span class="line"><em class="ital">computed</em></span>
+        <span class="line">in your browser.</span>
+      </h1>
+      <p class="lede">
+        From parcel pick to a branded PDF in under an hour. Site mapping,
+        3D massing, a full pro-forma, and an executive-summary report —
+        in one tool that runs locally and ships nothing to a server.
+      </p>
+      <div class="hero-cta">
+        <a href="../estatebuilder-ai.html" class="btn btn-primary">Open the tool <span aria-hidden="true">→</span></a>
+        <a href="https://github.com/dannystephenash/EstateBuilder.ai" class="btn btn-ghost">View source <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+
+    <figure class="hero-figure" aria-label="Isometric massing diagram: a podium with a setback tower">
+      <svg viewBox="0 0 520 560" xmlns="http://www.w3.org/2000/svg" class="iso-massing" aria-hidden="true">
+        <defs>
+          <pattern id="hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(60)">
+            <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(232,230,220,0.06)" stroke-width="1"/>
+          </pattern>
+        </defs>
+
+        <!-- Ground plane -->
+        <polygon points="60,440 260,540 460,440 260,340" fill="url(#hatch)" stroke="rgba(232,230,220,0.16)" stroke-width="1"/>
+
+        <!-- Podium (4 storeys) -->
+        <!-- Top face -->
+        <polygon points="120,360 260,430 400,360 260,290" fill="#0f0f0d" stroke="#e8e6dc" stroke-width="1.25"/>
+        <!-- Left face -->
+        <polygon points="120,360 120,440 260,510 260,430" fill="#141413" stroke="#e8e6dc" stroke-width="1.25"/>
+        <!-- Right face — accent -->
+        <polygon points="400,360 400,440 260,510 260,430" fill="#aebc46" fill-opacity="0.14" stroke="#aebc46" stroke-width="1.25"/>
+
+        <!-- Floor lines on podium right face (storey indication) -->
+        <g stroke="#aebc46" stroke-opacity="0.55" stroke-width="0.5">
+          <line x1="400" y1="380" x2="260" y2="450"/>
+          <line x1="400" y1="400" x2="260" y2="470"/>
+          <line x1="400" y1="420" x2="260" y2="490"/>
+        </g>
+
+        <!-- Tower (12 storeys, set back from podium edge) -->
+        <!-- Top face -->
+        <polygon points="180,200 280,250 380,200 280,150" fill="#0f0f0d" stroke="#e8e6dc" stroke-width="1.25"/>
+        <!-- Left face -->
+        <polygon points="180,200 180,360 280,410 280,250" fill="#141413" stroke="#e8e6dc" stroke-width="1.25"/>
+        <!-- Right face — glass curtain -->
+        <polygon points="380,200 380,360 280,410 280,250" fill="#1a1a18" stroke="#e8e6dc" stroke-width="1.25"/>
+        <!-- Floor mullions on right face -->
+        <g stroke="#e8e6dc" stroke-opacity="0.18" stroke-width="0.4">
+          <line x1="380" y1="220" x2="280" y2="270"/>
+          <line x1="380" y1="240" x2="280" y2="290"/>
+          <line x1="380" y1="260" x2="280" y2="310"/>
+          <line x1="380" y1="280" x2="280" y2="330"/>
+          <line x1="380" y1="300" x2="280" y2="350"/>
+          <line x1="380" y1="320" x2="280" y2="370"/>
+          <line x1="380" y1="340" x2="280" y2="390"/>
+        </g>
+        <!-- Vertical mullion -->
+        <line x1="330" y1="175" x2="330" y2="385" stroke="#e8e6dc" stroke-opacity="0.18" stroke-width="0.4"/>
+
+        <!-- Annotation: height callout -->
+        <g font-family="JetBrains Mono, monospace" font-size="10" fill="#aebc46" letter-spacing="0.5">
+          <line x1="430" y1="200" x2="430" y2="410" stroke="#aebc46" stroke-width="0.6"/>
+          <line x1="425" y1="200" x2="435" y2="200" stroke="#aebc46" stroke-width="0.6"/>
+          <line x1="425" y1="410" x2="435" y2="410" stroke="#aebc46" stroke-width="0.6"/>
+          <text x="442" y="307">52.4&nbsp;m</text>
+        </g>
+        <!-- Annotation: footprint -->
+        <g font-family="JetBrains Mono, monospace" font-size="10" fill="rgba(232,230,220,0.55)" letter-spacing="0.5">
+          <text x="60" y="475">FOOTPRINT 14,820&nbsp;sf</text>
+          <text x="60" y="490">PODIUM 4F · TOWER 13F</text>
+        </g>
+      </svg>
+    </figure>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     CALCULATION STRIP — Bloomberg-y horizontal data row
+     ───────────────────────────────────────────────────────────────────── -->
+<section class="strip">
+  <p class="strip-label">What it computes</p>
+  <div class="strip-grid">
+    <div class="strip-cell">
+      <span class="strip-key">FSI</span>
+      <span class="strip-val">4.62<span class="strip-unit">×</span></span>
+    </div>
+    <div class="strip-cell">
+      <span class="strip-key">Total GFA</span>
+      <span class="strip-val">106,252<span class="strip-unit">&nbsp;sf</span></span>
+    </div>
+    <div class="strip-cell">
+      <span class="strip-key">Total Cost</span>
+      <span class="strip-val">$87.4<span class="strip-unit">M</span></span>
+    </div>
+    <div class="strip-cell">
+      <span class="strip-key">IRR (unlev.)</span>
+      <span class="strip-val">14.2<span class="strip-unit">%</span></span>
+    </div>
+    <div class="strip-cell">
+      <span class="strip-key">Profit Margin</span>
+      <span class="strip-val accent">17.8<span class="strip-unit">%</span></span>
+    </div>
+    <div class="strip-cell">
+      <span class="strip-key">Sources &amp; Uses</span>
+      <span class="strip-val">4-way<span class="strip-unit">&nbsp;split</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     MODULES — three editorial columns
+     ───────────────────────────────────────────────────────────────────── -->
+<section class="modules">
+  <header class="section-head">
+    <p class="section-eyebrow">In Three Movements</p>
+    <h2 class="section-h2">Site, Massing, Report.</h2>
+  </header>
+
+  <div class="modules-grid">
+
+    <article class="module">
+      <p class="roman">I.</p>
+      <h3 class="module-h3">Site Plan</h3>
+      <p class="module-body">
+        Pick a Toronto-region parcel from Mapbox. Trace the lot, merge adjacent parcels,
+        toggle zoning overlays, and read the by-law in context — all without leaving the browser.
+      </p>
+      <svg class="module-icon" viewBox="0 0 120 80" aria-hidden="true">
+        <polygon points="20,60 50,18 95,28 105,55 70,72 35,68" fill="none" stroke="#e8e6dc" stroke-width="1.25"/>
+        <circle cx="20" cy="60" r="2.5" fill="#aebc46"/>
+        <circle cx="50" cy="18" r="2.5" fill="#aebc46"/>
+        <circle cx="95" cy="28" r="2.5" fill="#aebc46"/>
+        <circle cx="105" cy="55" r="2.5" fill="#aebc46"/>
+        <circle cx="70" cy="72" r="2.5" fill="#aebc46"/>
+        <circle cx="35" cy="68" r="2.5" fill="#aebc46"/>
+        <line x1="20" y1="60" x2="50" y2="18" stroke="rgba(232,230,220,0.25)" stroke-dasharray="2 3"/>
+      </svg>
+      <p class="module-tag">Mapbox · Turf · ArcGIS overlays</p>
+    </article>
+
+    <article class="module">
+      <p class="roman">II.</p>
+      <h3 class="module-h3">Massing</h3>
+      <p class="module-body">
+        Generate residential mid-rise, multi-tower, or Class-A industrial massings.
+        Step-backs, podium-tower transitions, angular planes, and shadow study —
+        all live, with parametric controls.
+      </p>
+      <svg class="module-icon" viewBox="0 0 120 80" aria-hidden="true">
+        <polygon points="20,60 60,75 100,60 60,45" fill="none" stroke="#e8e6dc" stroke-width="1.25"/>
+        <polygon points="35,52 60,62 85,52 60,42" fill="none" stroke="#e8e6dc" stroke-width="1.25"/>
+        <polygon points="45,42 60,49 75,42 60,35" fill="none" stroke="#aebc46" stroke-width="1.25"/>
+        <polygon points="50,30 60,34 70,30 60,26" fill="none" stroke="#aebc46" stroke-width="1.25"/>
+      </svg>
+      <p class="module-tag">Three.js r128 · custom geometry</p>
+    </article>
+
+    <article class="module">
+      <p class="roman">III.</p>
+      <h3 class="module-h3">Reports</h3>
+      <p class="module-body">
+        A branded PDF: cover, executive-summary KPI page, four-up 3D views,
+        full pro-forma with right-aligned numerals and a sources-and-uses pie,
+        plus zoning, comparables, and a DCF section.
+      </p>
+      <svg class="module-icon" viewBox="0 0 120 80" aria-hidden="true">
+        <rect x="20" y="14" width="55" height="60" fill="none" stroke="rgba(232,230,220,0.4)" stroke-width="1"/>
+        <rect x="28" y="22" width="55" height="60" fill="none" stroke="rgba(232,230,220,0.65)" stroke-width="1"/>
+        <rect x="36" y="30" width="55" height="60" fill="#0f0f0d" stroke="#e8e6dc" stroke-width="1.25"/>
+        <line x1="40" y1="40" x2="80" y2="40" stroke="#aebc46" stroke-width="1.25"/>
+        <line x1="40" y1="48" x2="74" y2="48" stroke="rgba(232,230,220,0.5)" stroke-width="0.5"/>
+        <line x1="40" y1="54" x2="74" y2="54" stroke="rgba(232,230,220,0.5)" stroke-width="0.5"/>
+        <line x1="40" y1="60" x2="74" y2="60" stroke="rgba(232,230,220,0.5)" stroke-width="0.5"/>
+        <line x1="40" y1="66" x2="74" y2="66" stroke="rgba(232,230,220,0.5)" stroke-width="0.5"/>
+        <circle cx="78" cy="78" r="6" fill="#aebc46" fill-opacity="0.2" stroke="#aebc46" stroke-width="1"/>
+      </svg>
+      <p class="module-tag">jsPDF · brand-configurable · multi-page</p>
+    </article>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     OUTPUT — what comes out (stylized PDF spread)
+     ───────────────────────────────────────────────────────────────────── -->
+<section class="output">
+  <header class="section-head">
+    <p class="section-eyebrow">The Deliverable</p>
+    <h2 class="section-h2">Every project ends in a PDF you can hand to a partner.</h2>
+  </header>
+
+  <div class="output-spread" aria-label="Stylized two-page PDF spread mockup">
+
+    <!-- Cover page mock -->
+    <div class="page-mock page-mock-cover">
+      <div class="page-rule"></div>
+      <p class="mock-brand">ESTATEBUILDER.AI</p>
+      <p class="mock-tagline">Development Feasibility Report</p>
+      <hr class="mock-hr">
+      <p class="mock-title-1">DEVELOPMENT</p>
+      <p class="mock-title-1">FEASIBILITY</p>
+      <p class="mock-title-1 mock-title-accent">REPORT</p>
+      <hr class="mock-hr">
+      <p class="mock-subtitle">1621 Eglinton Ave W</p>
+      <p class="mock-meta">Toronto, ON · May 2026</p>
+      <div class="mock-hero"></div>
+      <p class="mock-prep">PREPARED BY</p>
+      <p class="mock-prep-name">Acme Development Co.</p>
+      <p class="mock-page-footer">EstateBuilder.ai · 1</p>
+    </div>
+
+    <!-- Exec summary page mock -->
+    <div class="page-mock page-mock-exec">
+      <div class="page-rule"></div>
+      <p class="mock-section-title">EXECUTIVE SUMMARY</p>
+      <hr class="mock-hr">
+      <div class="mock-kpis">
+        <div class="mock-kpi"><span class="mock-kpi-label">TOTAL COST</span><span class="mock-kpi-val">$87.4M</span></div>
+        <div class="mock-kpi"><span class="mock-kpi-label">GROSS REV</span><span class="mock-kpi-val mock-kpi-pos">$103.0M</span></div>
+        <div class="mock-kpi"><span class="mock-kpi-label">MARGIN</span><span class="mock-kpi-val mock-kpi-pos">17.8%</span></div>
+        <div class="mock-kpi"><span class="mock-kpi-label">IRR</span><span class="mock-kpi-val mock-kpi-irr">14.2%</span></div>
+        <div class="mock-kpi"><span class="mock-kpi-label">UNITS</span><span class="mock-kpi-val">142</span></div>
+        <div class="mock-kpi"><span class="mock-kpi-label">GFA</span><span class="mock-kpi-val">106,252&nbsp;sf</span></div>
+      </div>
+      <p class="mock-narrative-head">PROJECT OVERVIEW</p>
+      <p class="mock-narrative">A 17-storey residential development of 142 units and 4,200 sf of ground-floor commercial on a 22,840 sf site (FSI 4.62×). Total project cost is estimated at $87.4M against gross revenue of $103.0M, producing a profit margin of 17.8% and an IRR of 14.2%.</p>
+
+      <!-- Faux pro-forma cost table snippet — fills the page and previews the
+           "right-aligned numerals + bold totals" treatment from Phase 2b. -->
+      <p class="mock-narrative-head" style="margin-top:1rem">DEVELOPMENT COSTS</p>
+      <table class="mock-table">
+        <thead><tr><th>Category</th><th>Amount</th><th>$/sf</th><th>%</th></tr></thead>
+        <tbody>
+          <tr><td>Land</td><td>$18.2M</td><td>$171</td><td>20.8%</td></tr>
+          <tr><td>Hard</td><td>$48.7M</td><td>$458</td><td>55.7%</td></tr>
+          <tr><td>Soft</td><td>$12.4M</td><td>$117</td><td>14.2%</td></tr>
+          <tr><td>Financing</td><td>$8.1M</td><td>$76</td><td>9.3%</td></tr>
+          <tr class="mock-table-total"><td>TOTAL</td><td>$87.4M</td><td>$822</td><td>100%</td></tr>
+        </tbody>
+      </table>
+
+      <p class="mock-page-footer">EstateBuilder.ai · 2</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     COLOPHON / FOOTER
+     ───────────────────────────────────────────────────────────────────── -->
+<footer class="colophon">
+  <hr class="colo-rule">
+  <div class="colo-grid">
+    <div class="colo-block">
+      <p class="colo-label">Built with</p>
+      <p class="colo-body">Three.js r128 · Mapbox GL · Turf.js · jsPDF · Vanilla JavaScript. No framework, no build step.</p>
+    </div>
+    <div class="colo-block">
+      <p class="colo-label">Open source</p>
+      <p class="colo-body"><a href="https://github.com/dannystephenash/EstateBuilder.ai" class="colo-link">github.com/dannystephenash/EstateBuilder.ai <span aria-hidden="true">↗</span></a></p>
+    </div>
+    <div class="colo-block">
+      <p class="colo-label">Status</p>
+      <p class="colo-body">v1 · Toronto-region zoning. Mississauga, Brampton, Vaughan, Markham next.</p>
+    </div>
+  </div>
+  <p class="colo-mark">EstateBuilder.ai · 2026</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
