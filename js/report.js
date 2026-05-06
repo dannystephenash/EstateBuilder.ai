@@ -155,28 +155,41 @@ async function exportPDF(){
   const maxSt=Math.max(...P.vols.map(v=>v.storeys));
   const maxHtM=((P.vols.some(v=>v.commGF)?P.flr.gf:P.flr.typ)+(maxSt-1)*P.flr.typ)*0.3048;
 
-  // ── Capture 3D massing canvas (perspective view, dynamically framed) ──
+  // ── Capture 3D massing canvas — cover hero (perspective with padding)
+  // plus four thumbnails (aerial / perspective / front / rear) for the
+  // dedicated 3D Views page that follows the executive summary. All
+  // captures run inside a single off-screen show/hide cycle and a single
+  // orb state save/restore to keep the live viewport stable.
   let massingImg=null, sitemapImg=null;
+  const viewImgs={aerial:null,perspective:null,front:null,rear:null};
   try{
     const cw_=document.getElementById('canvas-wrap');
     const wasHidden=cw_&&cw_.style.display==='none';
     if(wasHidden){cw_.style.display='block';cw_.style.position='absolute';cw_.style.left='-9999px';cw_.style.width='1200px';cw_.style.height='800px';}
     const c=document.querySelector('#canvas-wrap canvas');
     if(c&&renderer){
-      // Save current orbit state
+      // Save orbit state ONCE — restored after all captures
       const savedTheta=orb.theta, savedPhi=orb.phi, savedDist=orb.dist;
       const savedTarget=orb.target.clone();
-      // Use perspective view — setView() auto-calculates distance from building extents
-      setView('perspective');
-      // Add 20% extra distance for padding so the full building is visible
-      orb.dist=orb.dist*1.2;
-      updateCam();
-      // Render at high resolution
+      // Configure renderer for high-resolution capture (1200×800 = 3:2)
       renderer.setSize(1200,800);
       camera.aspect=1200/800;camera.updateProjectionMatrix();
-      renderer.render(scene,camera);
-      massingImg=c.toDataURL('image/jpeg',0.92);
-      // Restore orbit state
+      // setView() → optional dist multiplier → render → JPEG dataURL
+      const captureView=(viewName,distMult)=>{
+        setView(viewName);
+        if(distMult) orb.dist=orb.dist*distMult;
+        updateCam();
+        renderer.render(scene,camera);
+        return c.toDataURL('image/jpeg',0.92);
+      };
+      // Cover hero — perspective with 20% padding so the full building shows
+      massingImg = captureView('perspective', 1.2);
+      // Multi-view thumbnails — natural framing (no extra padding)
+      viewImgs.aerial      = captureView('aerial');
+      viewImgs.perspective = captureView('perspective');
+      viewImgs.front       = captureView('front');
+      viewImgs.rear        = captureView('rear');
+      // Restore orbit state ONCE
       orb.theta=savedTheta;orb.phi=savedPhi;orb.dist=savedDist;
       orb.target.copy(savedTarget);
       updateCam();
@@ -474,7 +487,63 @@ async function exportPDF(){
   y += 4;
   // (Per-page footer is appended later — no need for one here.)
 
-  // ══════ PAGE 2: SITE ANALYSIS ══════
+  // ══════════════════════════════════════════════════════════════════
+  //  PAGE 3: 3D MASSING VIEWS — four-up grid (aerial / perspective /
+  //  street frontage / rear-service). Same off-screen capture pipeline
+  //  that produced the cover hero; layout mirrors the executive summary
+  //  header (project name + address + date strip) for visual continuity.
+  // ══════════════════════════════════════════════════════════════════
+  newPage();
+  addText('3D MASSING VIEWS', M, y+8, {size:18, color:OLIVE, style:'bold'});
+  y += 16;
+  addText(P.projectName || 'Untitled Project', M, y, {size:11, color:WHITE});
+  y += 5;
+  addText(projectAddress + ' · ' + dateLong, M, y, {size:8.5, color:GREY});
+  y += 6;
+  addLine(y, [60,60,60]);
+  y += 10;
+
+  // 2×2 thumbnail grid. 3:2 aspect matches the 1200×800 capture so the
+  // images don't stretch. Caption strip under each thumb uses the same
+  // olive-accent + uppercase-label language as the KPI cards on page 2.
+  const _thumbW = 87;          // mm — two thumbs + 6mm gap = 180mm cw
+  const _thumbH = 58;          // mm — 3:2 aspect
+  const _thumbGap = 6;
+  const _captionH = 8;
+  const _cellH = _thumbH + _captionH;
+  const _gridY = y;
+  const _thumbDefs = [
+    {key:'aerial',      label:'AERIAL'},
+    {key:'perspective', label:'PERSPECTIVE'},
+    {key:'front',       label:'STREET FRONTAGE'},
+    {key:'rear',        label:'REAR / SERVICE'},
+  ];
+  _thumbDefs.forEach((t, i)=>{
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const tx = M + col * (_thumbW + _thumbGap);
+    const ty = _gridY + row * (_cellH + _thumbGap);
+    const img = viewImgs[t.key];
+    let drewImage = false;
+    if(img){
+      try{ doc.addImage(img, 'JPEG', tx, ty, _thumbW, _thumbH); drewImage = true; }
+      catch(_e){ /* fall through to placeholder */ }
+    }
+    if(!drewImage){
+      doc.setFillColor(40,40,40);
+      doc.roundedRect(tx, ty, _thumbW, _thumbH, 2, 2, 'F');
+      addText('— view unavailable —', tx + _thumbW/2, ty + _thumbH/2 + 1,
+              {size:8, color:GREY, align:'center'});
+    }
+    // Caption: left olive accent + uppercase label
+    const capY = ty + _thumbH + 2;
+    doc.setFillColor(...OLIVE);
+    doc.rect(tx, capY, 1.2, _captionH - 3, 'F');
+    addText(t.label, tx + 4, capY + 4.5, {size:8, color:OLIVE, style:'bold'});
+  });
+  y = _gridY + 2 * _cellH + _thumbGap + 4;
+
+  // ══════ SITE ANALYSIS ══════
   newPage();pageTitle('1. SITE ANALYSIS');
   if(sitemapImg){try{doc.addImage(sitemapImg,'JPEG',M,y,cw,60);y+=64;}catch(e){}}
   sectionHead('1.1 Location & Context');
