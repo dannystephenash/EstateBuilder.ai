@@ -1,4 +1,4 @@
-// cache-buster: 20260506e
+// cache-buster: 20260506f
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -1833,6 +1833,21 @@
         // Hedges: low continuous green box along the inside of the lot.
         // Trees: trunk + foliage sphere, distributed every ~30 ft along the
         // lot perimeter, with a denser row screening the truck court side.
+        //
+        // ROTATION-AWARE: lotVerts() returns the lot polygon in WORLD frame
+        // (already rotated). My tree/hedge positions are computed in world
+        // frame too. The post-orig rotation pass in _wrapDecor would rotate
+        // these AGAIN by +ax.angle, producing a double-rotation bug where
+        // the tree boundary doesn't align with the orange lot outline. To
+        // prevent that, mark each mesh with userData._industrialRotated =
+        // ax.angle BEFORE adding it to dg, so _rotateUnrotatedChildren
+        // skips it.
+        var _ax = (typeof wh !== 'undefined' && wh && wh._industrialAxis && wh._industrialAxis.angle) ? wh._industrialAxis : null;
+        function _markAsWorldFrame(mesh){
+          if(!_ax) return;
+          mesh.userData = mesh.userData || {};
+          mesh.userData._industrialRotated = _ax.angle;
+        }
         if(typeof lotVerts === 'function'){
           var lotF = lotVerts();
           if(Array.isArray(lotF) && lotF.length >= 3){
@@ -1904,12 +1919,14 @@
                 var trunkR = _ftToM(0.45);
                 var trunk = new THREE.Mesh(new THREE.CylinderGeometry(trunkR, trunkR, trunkH, 6), _matTrunk);
                 trunk.position.set(_ftToM(fx), trunkH / 2, _ftToM(fz));
+                _markAsWorldFrame(trunk);     // skip post-orig rotation pass
                 dg.add(trunk);
                 var folR = _ftToM(5 + Math.random() * 3);
                 var folMat = (ti2 % 3 === 0) ? _matFoliageDark : _matFoliage;
                 var fol = new THREE.Mesh(new THREE.SphereGeometry(folR, 7, 6), folMat);
                 fol.position.set(_ftToM(fx), trunkH + folR * 0.55, _ftToM(fz));
                 fol.scale.set(1, 0.85, 1);
+                _markAsWorldFrame(fol);
                 dg.add(fol);
               }
             }
@@ -1951,6 +1968,7 @@
                     var hMesh = new THREE.Mesh(new THREE.BoxGeometry(_ftToM(segLen) - _ftToM(2), hedgeH, hedgeW), _matHedge);
                     hMesh.position.set(_ftToM(hcx), hedgeH / 2, _ftToM(hcz));
                     hMesh.rotation.y = -Math.atan2(huz, hux);
+                    _markAsWorldFrame(hMesh);   // skip post-orig rotation pass
                     dg.add(hMesh);
                   }
                   inSeg = false;
