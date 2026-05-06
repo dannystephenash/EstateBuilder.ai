@@ -83,16 +83,16 @@ function rebuildEnvironment(){
   const cz=f2m((lotMinZ+lotMaxZ)/2);
 
   // Ground plane — centered on lot, with satellite imagery if GPS origin available.
-  // Expanded coverage: minimum 900 m (≈3 city blocks) and 6× the lot's longest
-  // dimension. Mapbox Static Images @2x gives 2560×2560 px regardless of bbox,
-  // so wider ground = lower resolution per metre. At 900 m this is ~0.35 m/px
-  // — still sharp enough to read individual buildings and street geometry while
-  // showing roughly 9× the surrounding context vs. the previous 300 m default.
-  // Detail-zone ground (carries the Mapbox satellite tile when available)
-  // Bumped minimum 900 → 2400 m so the satellite plane covers more of the
-  // visible viewport at the new 800 m max camera zoom-out. Resolution trade-off
-  // at 2400 m: ~0.94 m/px from the 2560-px satellite image — still readable.
-  const groundSize=Math.max(2400, f2m(Math.max(lotMaxX-lotMinX, lotMaxZ-lotMinZ))*6);
+  //
+  // Now uses Mapbox raster TILES (the same ones the Site Map tab streams
+  // via Mapbox GL JS) instead of the Static Images API. Site Map streams
+  // zoom-19 tiles at ~0.15 m/px; this 3D ground now does the same. Trade-
+  // off: smaller covered area (since each high-zoom tile covers less
+  // ground), so groundSize is reduced from 2400 m to 800 m default. Beyond
+  // 800 m the existing farGround (solid mid-grey, 8 km wide) fills in.
+  // Larger lots scale groundSize up automatically; the tile-fetch logic
+  // picks the highest zoom level that produces ≤ ~80 tiles for the area.
+  const groundSize=Math.min(1500, Math.max(800, f2m(Math.max(lotMaxX-lotMinX, lotMaxZ-lotMinZ))*4));
   const groundMat=new THREE.MeshStandardMaterial({color:0x383530,roughness:0.92});
   const ground=new THREE.Mesh(new THREE.PlaneGeometry(groundSize,groundSize), groundMat);
   ground.rotation.x=-Math.PI/2;
@@ -143,51 +143,82 @@ function rebuildEnvironment(){
       // Ensure south < north for bbox format [west,south,east,north]
       if(bboxSouth > bboxNorth){ var _tmp=bboxSouth; bboxSouth=bboxNorth; bboxNorth=_tmp; }
 
-      // ── 2×2 TILE-MOSAIC STRATEGY ──────────────────────────────────────
-      // Mapbox Static Images API caps a single request at 1280×1280@2x =
-      // 2560×2560 actual pixels. Spread across the ~2400 m ground extent
-      // that's ~0.94 m/px — visibly chunky when the camera is zoomed in
-      // on the building. Fetching 4 tiles for the 4 quadrants of the
-      // bbox and compositing to a 5120×5120 canvas DOUBLES the linear
-      // resolution (4× more pixels per area, ~0.47 m/px) at the same
-      // ground extent. Combined with anisotropic filtering this gives
-      // a dramatic visible quality bump at oblique camera angles.
+      // ── MAPBOX RASTER-TILE STRATEGY ───────────────────────────────────
+      // The Site Map tab streams Mapbox satellite tiles at zoom 18-19 via
+      // Mapbox GL JS, giving ~0.15-0.30 m/px. The previous Static Images
+      // mosaic approach maxed out at ~0.47 m/px regardless of zoom. To
+      // match Site Map quality, fetch the same raster tiles directly:
       //
-      // Cost: 4 Mapbox API calls per unique bbox vs. 1 previously.
-      // Mitigated by the bbox-keyed cache — repeat rebuilds at the same
-      // lot reuse the composited canvas without re-fetching.
-      var TILE_PX  = 2560;            // single tile 1280@2x
-      var MOSAIC_PX = TILE_PX * 2;    // 5120
-      var midLng = (bboxWest + bboxEast) / 2;
-      var midLat = (bboxSouth + bboxNorth) / 2;
-      function _tileURL(w, s, e, n){
-        return 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/'
-          + '[' + w.toFixed(6) + ',' + s.toFixed(6) + ','
-          + e.toFixed(6) + ',' + n.toFixed(6) + ']'
-          + '/1280x1280@2x?access_token=' + _satToken;
+      //   https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90
+      //
+      // Each tile is 256×256 logical / 512×512 actual at @2x. Compute
+      // the tile range covering the bbox, fetch every tile in parallel,
+      // composite onto a canvas, then crop to the EXACT target bbox
+      // (tiles align to a global grid so they overhang slightly).
+      // Zoom is auto-picked: highest zoom whose grid is ≤ 9 tiles wide
+      // (so we never blow up to 100+ API calls). For default ~800 m
+      // ground extent that's zoom 18 (5-7 tiles wide).
+      //
+      // Cost: tile count grows with bbox area. The cache (bbox+zoom keyed)
+      // means repeat rebuilds at the same lot reuse the composited canvas
+      // without re-fetching.
+      var TILE_PX = 512;     // 256 logical × @2x = 512 actual pixels per tile
+
+      // Web Mercator tile-coordinate helpers
+      function _lngToTileX(lng, z){ return ((lng + 180) / 360) * Math.pow(2, z); }
+      function _latToTileY(lat, z){
+        var r = lat * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1/Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
       }
-      var quadrants = [
-        // NW (westHalf × northHalf) → top-left of canvas
-        { url: _tileURL(bboxWest, midLat,    midLng,   bboxNorth), dx: 0,        dy: 0        },
-        // NE (eastHalf × northHalf) → top-right
-        { url: _tileURL(midLng,    midLat,    bboxEast, bboxNorth), dx: TILE_PX, dy: 0        },
-        // SW (westHalf × southHalf) → bottom-left
-        { url: _tileURL(bboxWest, bboxSouth, midLng,   midLat),    dx: 0,        dy: TILE_PX },
-        // SE (eastHalf × southHalf) → bottom-right
-        { url: _tileURL(midLng,    bboxSouth, bboxEast, midLat),    dx: TILE_PX, dy: TILE_PX }
-      ];
-      // Single-tile fallback URL — used if the mosaic fetch errors so
-      // the user still sees imagery, just at the lower resolution.
+      function _tileXToLng(x, z){ return x / Math.pow(2, z) * 360 - 180; }
+      function _tileYToLat(y, z){
+        var n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+        return Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))) * 180 / Math.PI;
+      }
+
+      // Pick the optimal zoom level for this bbox so the tile grid is
+      // ≤ maxTilesWide tiles wide — sweet spot between resolution and
+      // API cost. Walks zooms 19 → 12 picking the highest acceptable.
+      function _pickZoom(W, S, E, N, maxTilesWide){
+        for(var z = 19; z >= 12; z--){
+          var nx = Math.ceil(_lngToTileX(E, z)) - Math.floor(_lngToTileX(W, z));
+          if(nx <= maxTilesWide) return z;
+        }
+        return 12;
+      }
+      var SAT_ZOOM = _pickZoom(bboxWest, bboxSouth, bboxEast, bboxNorth, 9);
+
+      // Tile range covering the bbox (inclusive)
+      var minTX = Math.floor(_lngToTileX(bboxWest,  SAT_ZOOM));
+      var maxTX = Math.floor(_lngToTileX(bboxEast,  SAT_ZOOM));
+      var minTY = Math.floor(_latToTileY(bboxNorth, SAT_ZOOM));
+      var maxTY = Math.floor(_latToTileY(bboxSouth, SAT_ZOOM));
+      var nTX = maxTX - minTX + 1;
+      var nTY = maxTY - minTY + 1;
+      var nTiles = nTX * nTY;
+      var rawCanvasW = nTX * TILE_PX;
+      var rawCanvasH = nTY * TILE_PX;
+
+      // Tile-aligned bbox (slightly larger than target — used to compute
+      // crop offsets so we end up with a canvas that exactly covers the
+      // target bbox, not the tile-aligned superset).
+      var tileW = _tileXToLng(minTX,         SAT_ZOOM);
+      var tileE = _tileXToLng(maxTX + 1,     SAT_ZOOM);
+      var tileN = _tileYToLat(minTY,         SAT_ZOOM);
+      var tileS = _tileYToLat(maxTY + 1,     SAT_ZOOM);
+
+      console.log('[SAT] zoom=' + SAT_ZOOM + ', ' + nTX + '×' + nTY + '=' +
+                  nTiles + ' tiles for ' + Math.round(groundSize) + 'm extent (~' +
+                  (groundSize / Math.min(rawCanvasW, rawCanvasH)).toFixed(3) + ' m/px)');
+
+      // Cache key includes zoom + tile range so different zooms don't collide
+      var _satKey = SAT_ZOOM + '/' + minTX + '_' + minTY + '_' + maxTX + '_' + maxTY;
+
+      // Static-Images single-tile fallback URL — used if any tile fetch fails.
       var satUrl = 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/'
         + '[' + bboxWest.toFixed(6) + ',' + bboxSouth.toFixed(6) + ','
         + bboxEast.toFixed(6) + ',' + bboxNorth.toFixed(6) + ']'
         + '/1280x1280@2x?access_token=' + _satToken;
-
-      console.log('[SAT] Fetching 4-tile ' + MOSAIC_PX + '×' + MOSAIC_PX +
-                  ' mosaic for ' + Math.round(groundSize) + 'm ground extent (' +
-                  (groundSize / MOSAIC_PX).toFixed(2) + ' m/px)');
-
-      var _satKey = [bboxWest,bboxSouth,bboxEast,bboxNorth].map(function(v){return v.toFixed(5);}).join(',') + '@2x2';
 
       // Helper: create a fresh texture from an image / canvas with
       // mipmapping + anisotropic filtering, then apply it to the ground
@@ -227,28 +258,37 @@ function rebuildEnvironment(){
         _findGroundAndApply(window._satImgCache.img);
       } else {
         var _fetchId = (window._satFetchId = (window._satFetchId || 0) + 1);
+        var rawCanvas = document.createElement('canvas');
+        rawCanvas.width  = rawCanvasW;
+        rawCanvas.height = rawCanvasH;
+        var rawCtx = rawCanvas.getContext('2d');
         var loaded = 0;
         var failed = false;
-        var imgs = new Array(4);
 
-        function _onAllLoaded(){
+        function _composeAndApply(){
           if(_fetchId !== window._satFetchId) return;   // a newer fetch superseded
-          // Composite to canvas at full mosaic resolution
-          var canvas = document.createElement('canvas');
-          canvas.width = MOSAIC_PX;
-          canvas.height = MOSAIC_PX;
-          var ctx = canvas.getContext('2d');
-          for(var i = 0; i < 4; i++){
-            ctx.drawImage(imgs[i], quadrants[i].dx, quadrants[i].dy, TILE_PX, TILE_PX);
-          }
-          window._satImgCache = {key: _satKey, img: canvas};
-          console.log('[SAT] Mosaic composited (' + MOSAIC_PX + '×' + MOSAIC_PX + ')');
-          _findGroundAndApply(canvas);
+          // Crop the tile-aligned canvas to the EXACT target bbox.
+          // canvas y=0 is top (north), y=H is bottom (south).
+          var srcX = (bboxWest  - tileW) / (tileE - tileW) * rawCanvasW;
+          var srcY = (tileN     - bboxNorth) / (tileN - tileS) * rawCanvasH;
+          var srcW = (bboxEast  - bboxWest) / (tileE - tileW) * rawCanvasW;
+          var srcH = (tileN     - bboxSouth) / (tileN - tileS) * rawCanvasH;
+          var cropCanvas = document.createElement('canvas');
+          cropCanvas.width  = Math.max(2, Math.round(srcW));
+          cropCanvas.height = Math.max(2, Math.round(srcH));
+          cropCanvas.getContext('2d').drawImage(
+            rawCanvas, srcX, srcY, srcW, srcH,
+            0, 0, cropCanvas.width, cropCanvas.height
+          );
+          window._satImgCache = {key: _satKey, img: cropCanvas};
+          console.log('[SAT] ' + nTiles + '-tile mosaic composited + cropped to ' +
+                      cropCanvas.width + '×' + cropCanvas.height);
+          _findGroundAndApply(cropCanvas);
         }
 
         function _fallbackToSingleTile(){
           if(_fetchId !== window._satFetchId) return;
-          console.warn('[SAT] Falling back to single-tile fetch');
+          console.warn('[SAT] Falling back to Static Images single-tile fetch');
           var fb = new Image();
           fb.crossOrigin = 'anonymous';
           fb.onload = function(){
@@ -260,24 +300,37 @@ function rebuildEnvironment(){
           fb.src = satUrl;
         }
 
-        quadrants.forEach(function(q, i){
-          var img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.onload = function(){
-            if(_fetchId !== window._satFetchId) return;
-            if(failed) return;
-            imgs[i] = img;
-            loaded++;
-            if(loaded === 4) _onAllLoaded();
-          };
-          img.onerror = function(){
-            if(failed) return;
-            failed = true;
-            console.warn('[SAT] Tile ' + i + ' failed to load.');
-            _fallbackToSingleTile();
-          };
-          img.src = q.url;
-        });
+        // Fire all tile requests in parallel
+        for(var ty = minTY; ty <= maxTY; ty++){
+          for(var tx = minTX; tx <= maxTX; tx++){
+            (function(tx, ty){
+              var url = 'https://api.mapbox.com/v4/mapbox.satellite/' +
+                        SAT_ZOOM + '/' + tx + '/' + ty +
+                        '@2x.jpg90?access_token=' + _satToken;
+              var img = new Image();
+              img.crossOrigin = 'anonymous';
+              img.onload = function(){
+                if(_fetchId !== window._satFetchId) return;
+                if(failed) return;
+                rawCtx.drawImage(
+                  img,
+                  (tx - minTX) * TILE_PX,
+                  (ty - minTY) * TILE_PX,
+                  TILE_PX, TILE_PX
+                );
+                loaded++;
+                if(loaded === nTiles) _composeAndApply();
+              };
+              img.onerror = function(){
+                if(failed) return;
+                failed = true;
+                console.warn('[SAT] Tile ' + SAT_ZOOM + '/' + tx + '/' + ty + ' failed.');
+                _fallbackToSingleTile();
+              };
+              img.src = url;
+            })(tx, ty);
+          }
+        }
       }
     } catch(e){ console.error('[SAT] Error:', e); }
   }
