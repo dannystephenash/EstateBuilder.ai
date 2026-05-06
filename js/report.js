@@ -323,37 +323,142 @@ async function exportPDF(){
     return ty;
   }
 
-  // ══════ PAGE 1: COVER ══════
-  doc.setFillColor(...DARK);doc.rect(0,0,W,H,'F');
-  doc.setFillColor(...OLIVE);doc.rect(0,0,W,8,'F');
-  addText('OLEADEV',M,30,{size:14,color:OLIVE,style:'bold'});
-  addText('DEVELOPMENT ADVISORY',M,37,{size:8,color:GREY});
-  addLine(42,OLIVE);
-  addText('HIGHEST & BEST USE',M,62,{size:26,color:WHITE,style:'bold'});
-  addText('ANALYSIS',M,75,{size:26,color:OLIVE,style:'bold'});
-  addLine(82,OLIVE);
-  addText(P.projectName||'Development Site',M,95,{size:13,color:WHITE});
-  addText('City of Toronto, Ontario, Canada',M,103,{size:11,color:LGREY});
-  const now=new Date();addText(now.toLocaleDateString('en-US',{month:'long',year:'numeric'}),M,112,{size:10,color:GREY});
-  // Massing render on cover
-  if(massingImg){try{doc.addImage(massingImg,'JPEG',M,125,cw,75);}catch(e){}}
-  // Summary box
-  const by=massingImg?205:140;
-  doc.setFillColor(30,30,30);doc.roundedRect(M,by,cw,65,3,3,'F');
-  doc.setDrawColor(...OLIVE);doc.roundedRect(M,by,cw,65,3,3,'S');
-  addText('PROJECT AT A GLANCE',M+5,by+10,{size:10,color:OLIVE,style:'bold'});
-  const col1=M+5, col2=M+cw/2;
-  addText('Lot Area:',col1,by+20,{size:8.5,color:GREY});addText(d.siteArea.toLocaleString()+' sf ('+(d.siteArea*0.0929).toFixed(0)+' m²)',col1+28,by+20,{size:8.5,color:WHITE,style:'bold'});
-  addText('Total GFA:',col2,by+20,{size:8.5,color:GREY});addText(d.totalGFA.toLocaleString()+' sf',col2+28,by+20,{size:8.5,color:WHITE,style:'bold'});
-  addText('FSI:',col1,by+28,{size:8.5,color:GREY});addText(d.fsi.toFixed(2)+'×',col1+28,by+28,{size:8.5,color:WHITE,style:'bold'});
-  addText('Storeys:',col2,by+28,{size:8.5,color:GREY});addText(maxSt+'F ('+maxHtM.toFixed(1)+'m)',col2+28,by+28,{size:8.5,color:WHITE,style:'bold'});
-  addText('Units:',col1,by+36,{size:8.5,color:GREY});addText(d.totalUnits+' residential',col1+28,by+36,{size:8.5,color:WHITE,style:'bold'});
-  addText('Comm. GFA:',col2,by+36,{size:8.5,color:GREY});addText(d.commGFA.toLocaleString()+' sf',col2+28,by+36,{size:8.5,color:WHITE,style:'bold'});
-  addText('Total Revenue:',col1,by+44,{size:8.5,color:GREY});addText(fmtM(d.totalGrossRev),col1+28,by+44,{size:8.5,color:[100,200,100],style:'bold'});
-  addText('Total Cost:',col2,by+44,{size:8.5,color:GREY});addText(fmtM(d.totalCost),col2+28,by+44,{size:8.5,color:WHITE,style:'bold'});
-  addText('Profit:',col1,by+52,{size:9,color:GREY});addText(fmtM(d.margin)+' ('+pct(d.marginOnCost)+')',col1+28,by+52,{size:9,color:d.marginOnCost>=0.15?[100,200,100]:[220,100,100],style:'bold'});
-  addText('IRR:',col2,by+52,{size:9,color:GREY});const dcfR=calcDCF(d);addText(pct(dcfR.irr),col2+28,by+52,{size:9,color:[196,154,222],style:'bold'});
-  addText('Confidential — Prepared by OleaDev Development Advisory',W/2,H-10,{size:7,color:GREY,align:'center'});
+  // ══════════════════════════════════════════════════════════════════
+  //  PAGE 1: COVER — branded title page with hero render
+  // ══════════════════════════════════════════════════════════════════
+  // Pulled common values into the outer scope so the Executive Summary
+  // page (page 2) can use them without recomputing.
+  const now = new Date();
+  const BRAND = P.brand || {};
+  const brandName = BRAND.companyName || 'EstateBuilder.ai';
+  const brandTag  = BRAND.tagline     || 'Real Estate Development Feasibility';
+  const dcfR = calcDCF(d);
+  const projectAddress = P.siteAddress
+    || (P.siteCoords ? ('Lat ' + P.siteCoords.lat.toFixed(4) + ', Lng ' + P.siteCoords.lng.toFixed(4)) : 'City of Toronto, Ontario');
+  const dateLong = now.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'});
+
+  // Page background + olive accent at top edge
+  doc.setFillColor(...DARK); doc.rect(0,0,W,H,'F');
+  doc.setFillColor(...OLIVE); doc.rect(0,0,W,8,'F');
+
+  // ── Brand mark (top-left) — logo if uploaded, else company name only ──
+  if(BRAND.logo){
+    try { doc.addImage(BRAND.logo, M, 18, 22, 22); } catch(_eLogo){}
+    addText(brandName, M+28, 28, {size:14, color:OLIVE, style:'bold'});
+    addText(brandTag,  M+28, 35, {size:8.5, color:GREY});
+  } else {
+    addText(brandName, M, 28, {size:14, color:OLIVE, style:'bold'});
+    addText(brandTag,  M, 35, {size:8.5, color:GREY});
+  }
+  addLine(48, [60,60,60]);
+
+  // ── Title ──
+  addText('DEVELOPMENT FEASIBILITY', M, 72, {size:24, color:WHITE, style:'bold'});
+  addText('REPORT',                  M, 86, {size:24, color:OLIVE, style:'bold'});
+  addLine(94, [60,60,60]);
+
+  // ── Project meta ──
+  addText(P.projectName || 'Untitled Project', M, 110, {size:16, color:WHITE});
+  addText(projectAddress, M, 118, {size:10, color:LGREY});
+  addText(dateLong,       M, 125, {size:9,  color:GREY});
+
+  // ── Hero massing render — 110mm tall, full content width ──
+  if(massingImg){
+    try { doc.addImage(massingImg, 'JPEG', M, 138, cw, 95); } catch(_eImg){}
+  } else {
+    // No massing yet — placeholder block so the cover still has visual weight
+    doc.setFillColor(40,40,40); doc.roundedRect(M, 138, cw, 95, 2, 2, 'F');
+    addText('— massing render unavailable —', W/2, 188, {size:9, color:GREY, align:'center'});
+  }
+
+  // ── Prepared by / Prepared for (only render if set, so unbranded
+  //    projects don't show empty placeholders) ──
+  let preparedY = 248;
+  if(BRAND.preparedFor){
+    addText('PREPARED FOR', M, preparedY, {size:7, color:GREY, style:'bold'});
+    addText(BRAND.preparedFor, M, preparedY+5, {size:10, color:WHITE});
+    preparedY += 14;
+  }
+  if(BRAND.preparedBy){
+    addText('PREPARED BY', M, preparedY, {size:7, color:GREY, style:'bold'});
+    addText(BRAND.preparedBy, M, preparedY+5, {size:10, color:WHITE});
+  }
+
+  // ── Footer (centered) ──
+  addText('Confidential · ' + brandName + ' · ' + now.getFullYear(),
+          W/2, H-10, {size:7, color:GREY, align:'center'});
+
+  // ══════════════════════════════════════════════════════════════════
+  //  PAGE 2: EXECUTIVE SUMMARY — six KPI cards + project narrative
+  // ══════════════════════════════════════════════════════════════════
+  newPage();
+  // Page header
+  addText('EXECUTIVE SUMMARY', M, y+8, {size:18, color:OLIVE, style:'bold'});
+  y += 16;
+  addText(P.projectName || 'Untitled Project', M, y, {size:11, color:WHITE});
+  y += 5;
+  addText(projectAddress + ' · ' + dateLong, M, y, {size:8.5, color:GREY});
+  y += 6;
+  addLine(y, [60,60,60]);
+  y += 10;
+
+  // ── KPI grid: 2 rows × 3 columns ──
+  const kpiGap = 4;
+  const kpiW = (cw - 2 * kpiGap) / 3;
+  const kpiH = 32;
+  const kpiBaseY = y;
+
+  function _kpiCard(col, row, label, value, valueColor){
+    const x = M + col * (kpiW + kpiGap);
+    const cardY = kpiBaseY + row * (kpiH + kpiGap);
+    doc.setFillColor(28,28,30);
+    doc.roundedRect(x, cardY, kpiW, kpiH, 2, 2, 'F');
+    doc.setDrawColor(...OLIVE);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(x, cardY, kpiW, kpiH, 2, 2, 'S');
+    // Tiny olive accent strip on the left edge — visual anchor
+    doc.setFillColor(...OLIVE);
+    doc.rect(x, cardY, 1.2, kpiH, 'F');
+    // Label (small caps grey)
+    addText(label, x + 5, cardY + 8, {size:7.5, color:GREY, style:'bold'});
+    // Value (large bold, color depends on KPI)
+    addText(value, x + 5, cardY + 24, {size:18, color: valueColor || WHITE, style:'bold'});
+  }
+
+  // Row 1 — financial outcomes
+  _kpiCard(0, 0, 'TOTAL COST',     fmtM(d.totalCost),                                   WHITE);
+  _kpiCard(1, 0, 'GROSS REVENUE',  fmtM(d.totalGrossRev),                               [120,200,120]);
+  _kpiCard(2, 0, 'PROFIT MARGIN',  pct(d.marginOnCost),
+                                   d.marginOnCost >= 0.15 ? [120,200,120] :
+                                   d.marginOnCost >= 0.05 ? [225,200,90]  : [220,120,90]);
+
+  // Row 2 — risk & program
+  _kpiCard(0, 1, 'IRR',            pct(dcfR.irr),                                       [196,154,222]);
+  _kpiCard(1, 1, 'TOTAL UNITS',    String(d.totalUnits),                                WHITE);
+  _kpiCard(2, 1, 'TOTAL GFA',      d.totalGFA.toLocaleString() + ' sf',                 WHITE);
+
+  y = kpiBaseY + 2 * (kpiH + kpiGap) + 8;
+
+  // ── Project narrative ──
+  addText('PROJECT OVERVIEW', M, y, {size:9, color:OLIVE, style:'bold'});
+  y += 6;
+  const narrativeStoreys = (typeof maxSt === 'number' && maxSt > 0) ? maxSt : 1;
+  const narrative =
+    'A ' + narrativeStoreys + '-storey ' + (P.projectType || 'midrise') + ' development of ' +
+    d.totalUnits.toLocaleString() + ' residential units' +
+    (d.commGFA > 0 ? ' and ' + d.commGFA.toLocaleString() + ' sf of ground-floor commercial space' : '') +
+    ' on a ' + d.siteArea.toLocaleString() + ' sf site (FSI ' + d.fsi.toFixed(2) + '×). ' +
+    'Total project cost is estimated at ' + fmtM(d.totalCost) + ' against gross revenue of ' +
+    fmtM(d.totalGrossRev) + ', producing a profit margin of ' + pct(d.marginOnCost) +
+    ' and an internal rate of return of ' + pct(dcfR.irr) + '. ' +
+    'The following sections provide site analysis, zoning framework, building massing, ' +
+    'unit mix, full pro-forma, cost summary, DCF model + risk analysis, and project recommendations.';
+  para(narrative, {size:9.5, color:LGREY});
+  y += 4;
+
+  // ── Page footer (matches cover) ──
+  addText('Confidential · ' + brandName + ' · ' + now.getFullYear(),
+          W/2, H-10, {size:7, color:GREY, align:'center'});
 
   // ══════ PAGE 2: SITE ANALYSIS ══════
   newPage();pageTitle('1. SITE ANALYSIS');
@@ -1647,3 +1752,91 @@ function renderReport(){
     console.error('renderReport error:',e);
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BRAND METADATA HELPERS — call from browser console
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  uploadBrandLogo()
+//    Opens a file picker. Reads the chosen image (PNG / JPEG / SVG) as a
+//    base64 data URL and stores it in P.brand.logo. The cover page of the
+//    next PDF export will display it in the top-left.
+//
+//  setBrandInfo({companyName, tagline, preparedBy, preparedFor})
+//    Updates one or more brand text fields. Pass only the keys you want
+//    to change. Saves immediately so refresh persists the change.
+//
+//  clearBrandLogo()
+//    Removes the uploaded logo (cover falls back to text-only company name).
+// ═══════════════════════════════════════════════════════════════════════════
+(function(){
+  if(typeof window === 'undefined') return;
+
+  function _ensureBrand(){
+    if(typeof P === 'undefined' || !P) return null;
+    P.brand = P.brand || {
+      companyName:'EstateBuilder.ai',
+      tagline:'Real Estate Development Feasibility',
+      preparedBy:'',
+      preparedFor:'',
+      logo:''
+    };
+    return P.brand;
+  }
+
+  window.uploadBrandLogo = function(){
+    var brand = _ensureBrand();
+    if(!brand){ console.warn('[Brand] P not ready yet'); return; }
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/jpg,image/svg+xml';
+    input.style.display = 'none';
+    input.onchange = function(e){
+      var file = e.target && e.target.files && e.target.files[0];
+      if(!file){ console.warn('[Brand] no file selected'); return; }
+      // 2 MB hard limit — base64 encoding inflates ~33 %, larger files
+      // bloat localStorage and slow PDF export. Most logos are < 200 KB.
+      if(file.size > 2 * 1024 * 1024){
+        console.warn('[Brand] file too large (' + Math.round(file.size/1024) + ' KB). Limit: 2 MB.');
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(ev){
+        brand.logo = ev.target.result;
+        try { if(typeof autoSave === 'function') autoSave(); } catch(_eA){}
+        console.log('[Brand] Logo uploaded (' + Math.round(file.size/1024) + ' KB, ' +
+                    file.type + '). Will appear on the next PDF cover page.');
+      };
+      reader.onerror = function(){ console.warn('[Brand] FileReader failed'); };
+      reader.readAsDataURL(file);
+      try { document.body.removeChild(input); } catch(_eR){}
+    };
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  window.setBrandInfo = function(opts){
+    var brand = _ensureBrand();
+    if(!brand){ console.warn('[Brand] P not ready yet'); return; }
+    if(!opts || typeof opts !== 'object'){
+      console.log('[Brand] Current state:', JSON.parse(JSON.stringify(brand)));
+      console.log('[Brand] Usage: setBrandInfo({companyName, tagline, preparedBy, preparedFor})');
+      return;
+    }
+    ['companyName','tagline','preparedBy','preparedFor'].forEach(function(k){
+      if(opts[k] !== undefined) brand[k] = String(opts[k]);
+    });
+    try { if(typeof autoSave === 'function') autoSave(); } catch(_eA){}
+    console.log('[Brand] Updated:', JSON.parse(JSON.stringify(brand)));
+  };
+
+  window.clearBrandLogo = function(){
+    var brand = _ensureBrand();
+    if(!brand) return;
+    brand.logo = '';
+    try { if(typeof autoSave === 'function') autoSave(); } catch(_eA){}
+    console.log('[Brand] Logo cleared.');
+  };
+
+  console.log('[Brand] helpers ready: uploadBrandLogo(), setBrandInfo({...}), clearBrandLogo()');
+})();

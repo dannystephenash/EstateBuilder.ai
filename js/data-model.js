@@ -9,6 +9,17 @@ const m2f=m=>m/FT;
 const P={
   projectName:'Untitled Project',
   projectType:'midrise', // 'midrise' | 'highrise'
+
+  // ── Brand metadata (cover page + footer of PDF reports) ─────────────
+  // Set via console: setBrandInfo({companyName, tagline, preparedBy, preparedFor})
+  // Logo: uploadBrandLogo() opens a file picker and stores base64 here.
+  brand:{
+    companyName:'EstateBuilder.ai',
+    tagline:'Real Estate Development Feasibility',
+    preparedBy:'',
+    preparedFor:'',
+    logo:''   // base64 data URL — '' = no logo
+  },
   lot:{front:60, upperRight:80, stepEast:0, lowerRight:80, upperLeft:80, notchWest:0, lowerLeft:80, rear:60},
   set:{front:10, stepback:3, sideE:12, sideW:4, rear:10},
   flr:{gf:15, typ:10},

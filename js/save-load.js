@@ -59,7 +59,9 @@ function getState(){
     assetClass:P.assetClass||null,
     industrialSurfaces:deep(P.industrialSurfaces),
     industrialRotation:deep(P._industrialRotation),
-    frontStreetEdge:(typeof P._frontStreetEdge === 'number') ? P._frontStreetEdge : null
+    frontStreetEdge:(typeof P._frontStreetEdge === 'number') ? P._frontStreetEdge : null,
+    // ── Brand metadata for PDF cover + footer ─────────────────────────
+    brand:deep(P.brand)
   };
   // De-dupe the lot polygon and every volume's customPolyLocal
   if(typeof _dedupePolyVerts === 'function'){
@@ -209,6 +211,13 @@ function applyState(state){
     P._industrialRotation = state.industrialRotation;
   }
   if(typeof state.frontStreetEdge === 'number') P._frontStreetEdge = state.frontStreetEdge;
+  // Brand metadata — merge keeping defaults for any missing keys
+  if(state.brand && typeof state.brand === 'object'){
+    P.brand = P.brand || {};
+    Object.keys(state.brand).forEach(function(k){
+      if(state.brand[k] !== undefined) P.brand[k] = state.brand[k];
+    });
+  }
   // Project name
   if(state.projectName) P.projectName=state.projectName;
   if(state.comparables) P.comparables=state.comparables;
