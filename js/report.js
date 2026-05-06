@@ -358,17 +358,36 @@ async function exportPDF(){
   addLine(94, [60,60,60]);
 
   // ── Project meta ──
-  addText(P.projectName || 'Untitled Project', M, 110, {size:16, color:WHITE});
-  addText(projectAddress, M, 118, {size:10, color:LGREY});
-  addText(dateLong,       M, 125, {size:9,  color:GREY});
+  // Project name wraps to multiple lines via splitTextToSize so long
+  // multi-address titles ("1621 Eglinton Ave W + 1623 Eglinton Ave W
+  // + 1625 Eglinton Ave W + 88 Lanark Ave + 86 Lanark Ave") don't get
+  // truncated. Caps at 3 lines so the rest of the cover layout stays
+  // intact; address + date follow the last project-name line.
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(16);
+  doc.setTextColor(...WHITE);
+  const projTitleLines = doc.splitTextToSize(P.projectName || 'Untitled Project', cw).slice(0, 3);
+  let projY = 110;
+  const projLineH = 7;
+  projTitleLines.forEach((line, i) => {
+    doc.text(line, M, projY + i * projLineH);
+  });
+  // Address + date sit just below the last title line
+  const metaY = projY + projTitleLines.length * projLineH + 2;
+  addText(projectAddress, M, metaY,     {size:10, color:LGREY});
+  addText(dateLong,       M, metaY + 7, {size:9,  color:GREY});
 
-  // ── Hero massing render — 110mm tall, full content width ──
+  // ── Hero massing render — fills the rest of the cover above the
+  // prepared-by block. Top edge moves down based on how many title
+  // lines wrapped, so the layout breathes for longer project names.
+  const heroTop = Math.max(138, metaY + 18);
+  const heroH   = Math.min(105, 240 - heroTop);
   if(massingImg){
-    try { doc.addImage(massingImg, 'JPEG', M, 138, cw, 95); } catch(_eImg){}
+    try { doc.addImage(massingImg, 'JPEG', M, heroTop, cw, heroH); } catch(_eImg){}
   } else {
     // No massing yet — placeholder block so the cover still has visual weight
-    doc.setFillColor(40,40,40); doc.roundedRect(M, 138, cw, 95, 2, 2, 'F');
-    addText('— massing render unavailable —', W/2, 188, {size:9, color:GREY, align:'center'});
+    doc.setFillColor(40,40,40); doc.roundedRect(M, heroTop, cw, heroH, 2, 2, 'F');
+    addText('— massing render unavailable —', W/2, heroTop + heroH/2, {size:9, color:GREY, align:'center'});
   }
 
   // ── Prepared by / Prepared for (only render if set, so unbranded
@@ -383,10 +402,8 @@ async function exportPDF(){
     addText('PREPARED BY', M, preparedY, {size:7, color:GREY, style:'bold'});
     addText(BRAND.preparedBy, M, preparedY+5, {size:10, color:WHITE});
   }
-
-  // ── Footer (centered) ──
-  addText('Confidential · ' + brandName + ' · ' + now.getFullYear(),
-          W/2, H-10, {size:7, color:GREY, align:'center'});
+  // (Per-page footer is added once at the end via doc.getNumberOfPages()
+  // loop — no need for a separate cover footer here.)
 
   // ══════════════════════════════════════════════════════════════════
   //  PAGE 2: EXECUTIVE SUMMARY — six KPI cards + project narrative
@@ -435,7 +452,7 @@ async function exportPDF(){
   // Row 2 — risk & program
   _kpiCard(0, 1, 'IRR',            pct(dcfR.irr),                                       [196,154,222]);
   _kpiCard(1, 1, 'TOTAL UNITS',    String(d.totalUnits),                                WHITE);
-  _kpiCard(2, 1, 'TOTAL GFA',      d.totalGFA.toLocaleString() + ' sf',                 WHITE);
+  _kpiCard(2, 1, 'TOTAL GFA',      Math.round(d.totalGFA).toLocaleString() + ' sf',     WHITE);
 
   y = kpiBaseY + 2 * (kpiH + kpiGap) + 8;
 
@@ -446,8 +463,8 @@ async function exportPDF(){
   const narrative =
     'A ' + narrativeStoreys + '-storey ' + (P.projectType || 'midrise') + ' development of ' +
     d.totalUnits.toLocaleString() + ' residential units' +
-    (d.commGFA > 0 ? ' and ' + d.commGFA.toLocaleString() + ' sf of ground-floor commercial space' : '') +
-    ' on a ' + d.siteArea.toLocaleString() + ' sf site (FSI ' + d.fsi.toFixed(2) + '×). ' +
+    (d.commGFA > 0 ? ' and ' + Math.round(d.commGFA).toLocaleString() + ' sf of ground-floor commercial space' : '') +
+    ' on a ' + Math.round(d.siteArea).toLocaleString() + ' sf site (FSI ' + d.fsi.toFixed(2) + '×). ' +
     'Total project cost is estimated at ' + fmtM(d.totalCost) + ' against gross revenue of ' +
     fmtM(d.totalGrossRev) + ', producing a profit margin of ' + pct(d.marginOnCost) +
     ' and an internal rate of return of ' + pct(dcfR.irr) + '. ' +
@@ -455,10 +472,7 @@ async function exportPDF(){
     'unit mix, full pro-forma, cost summary, DCF model + risk analysis, and project recommendations.';
   para(narrative, {size:9.5, color:LGREY});
   y += 4;
-
-  // ── Page footer (matches cover) ──
-  addText('Confidential · ' + brandName + ' · ' + now.getFullYear(),
-          W/2, H-10, {size:7, color:GREY, align:'center'});
+  // (Per-page footer is appended later — no need for one here.)
 
   // ══════ PAGE 2: SITE ANALYSIS ══════
   newPage();pageTitle('1. SITE ANALYSIS');
@@ -1081,15 +1095,22 @@ async function exportPDF(){
   const steps=['Engage planning consultant for pre-application consultation with City of Toronto','Commission Phase 1 Environmental Site Assessment (ESA)','Prepare and submit ZBA and SPA applications','Engage structural engineer for shoring design and below-grade parking layout','Initiate pre-sales marketing program (target 70% pre-sale threshold for construction financing)','Secure construction financing commitment (target LTC of '+(P.pf.ltc*100)+'% at prime + 200 bps)','Tender construction contract with fixed-price GMP structure'];
   steps.forEach((s,i)=>{checkP(6);addText((i+1)+'. '+s,M+3,y,{size:8.5,color:LGREY});y+=5;});
 
-  // Footer on all pages
+  // Footer on all pages — uses the brand metadata (no more hardcoded
+  // "OleaDev"). Single line: confidential + brand on the left,
+  // page-x-of-y on the right. The redundant centered project-name
+  // line was removed; project name already appears prominently on
+  // the cover and the executive summary header.
   const pageCount=doc.getNumberOfPages();
   for(let p=1;p<=pageCount;p++){
     doc.setPage(p);doc.setFontSize(7);doc.setTextColor(100,100,100);
-    doc.text('OleaDev Development Advisory — Confidential',M,H-8);
-    doc.text((P.projectName||'Project')+' — HBU Analysis',W/2,H-8,{align:'center'});
-    doc.text('Page '+p+' of '+pageCount,W-M,H-8,{align:'right'});
+    doc.text('Confidential · ' + brandName, M, H-8);
+    doc.text('Page '+p+' of '+pageCount, W-M, H-8, {align:'right'});
   }
-  doc.save('OleaDev_'+(P.projectName||'Project').replace(/[^a-zA-Z0-9]/g,'_')+'_HBU_Report.pdf');
+  // Filename uses sanitized brand + project name. Default brand falls
+  // back to "EstateBuilder", and an empty project name to "Project".
+  const fileBrand = (brandName || 'EstateBuilder').replace(/[^a-zA-Z0-9]/g,'_');
+  const fileProj  = (P.projectName || 'Project').replace(/[^a-zA-Z0-9]/g,'_').slice(0, 60);
+  doc.save(fileBrand + '_' + fileProj + '_Feasibility_Report.pdf');
   }catch(err){alert('PDF export error: '+err.message);console.error(err);}
 }
 
