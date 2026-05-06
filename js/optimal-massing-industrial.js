@@ -1,4 +1,4 @@
-// cache-buster: 20260506c
+// cache-buster: 20260506d
 // optimal-massing-industrial.js — modern Class A bulk warehouse generator
 // =============================================================================
 // Inscribed-rectangle algorithm so the building always fits inside the actual
@@ -2443,25 +2443,31 @@
       console.log('[Industrial strip] removed ' + (before - P.vols.length) + ' cached office vol(s)');
     }
   }
-  if(typeof window !== 'undefined'){
-    var _origRA_clip = window.rebuildAll;
-    if(typeof _origRA_clip === 'function'){
-      window.rebuildAll = function(){
-        // 1) Strip any cached office vol up front — the new generator only
-        //    produces a warehouse, but autosaved older projects still have
-        //    a separate office volume that renders as a glass tower cube.
-        try { _stripIndustrialOfficeVols(); } catch(e){ console.warn('[Industrial strip] error:', e && e.message); }
-        // 2) Run the legacy absorb pass for projects that have _industrialAxis
-        //    but were created before the single-vol generator landed.
-        try {
-          if(typeof window._industrialAbsorbOffice === 'function') window._industrialAbsorbOffice();
-        } catch(e){ console.warn('[Industrial absorb (rebuildAll)] error:', e && e.message); }
-        // 3) Clip surfaces + rebuild landscape ring + drive aisle.
-        try { _clipSurfacesAndAddLandscape(); } catch(e){ console.warn('[Industrial clip] error:', e && e.message); }
-        return _origRA_clip.apply(this, arguments);
-      };
+  // Migrated chained pre-rebuild logic to three separate hooks. Order
+  // preserved by priority numbers (lower priority = earlier execution).
+  // Each step is independent and now individually inspectable / removable.
+  function _registerClipChainHooks(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerClipChainHooks, 50);
+      return;
     }
+    // Step 1: strip cached office vols (autosaved old projects)
+    window.registerRebuildHook('preRebuild', 'stripIndustrialOfficeVols', function(){
+      try { _stripIndustrialOfficeVols(); } catch(e){ console.warn('[Industrial strip] error:', e && e.message); }
+    }, 5);
+    // Step 2: legacy absorb pass for projects with _industrialAxis but
+    //   created before the single-vol generator landed
+    window.registerRebuildHook('preRebuild', 'industrialAbsorbOffice', function(){
+      try {
+        if(typeof window._industrialAbsorbOffice === 'function') window._industrialAbsorbOffice();
+      } catch(e){ console.warn('[Industrial absorb (rebuildAll)] error:', e && e.message); }
+    }, 7);
+    // Step 3: clip surfaces + rebuild landscape ring + drive aisle
+    window.registerRebuildHook('preRebuild', 'clipSurfacesAndAddLandscape', function(){
+      try { _clipSurfacesAndAddLandscape(); } catch(e){ console.warn('[Industrial clip] error:', e && e.message); }
+    }, 8);
   }
+  _registerClipChainHooks();
   window._industrialClipSurfaces = _clipSurfacesAndAddLandscape;
   window._industrialStripOffice = _stripIndustrialOfficeVols;
 })();
@@ -3106,23 +3112,27 @@
     } catch(e){ console.warn('[Industrial trees filter] error:', e && e.message); return 0; }
   }
 
-  // Hook into rebuildAll. Multi-pass schedule for hide; tree filter runs synchronously
-  // BEFORE rebuildAll so the renderer never paints out-of-lot trees in the first place.
-  if(typeof window !== 'undefined'){
-    var _origRA_brute = window.rebuildAll;
-    if(typeof _origRA_brute === 'function'){
-      window.rebuildAll = function(){
-        try { _filterTreesToLot(); } catch(e){}
-        var r = _origRA_brute.apply(this, arguments);
-        var schedule = [50, 200, 500, 1000, 2000, 3500];
-        schedule.forEach(function(ms){ setTimeout(_bruteHide, ms); });
-        // Trees are added by the trees IIFE at 200ms, so re-filter at 250ms
-        setTimeout(_filterTreesToLot, 250);
-        setTimeout(_filterTreesToLot, 1000);
-        return r;
-      };
+  // Migrated multi-pass hide schedule + pre-render tree filter to hooks.
+  // Tree filter is preRebuild (priority 12) — runs synchronously before
+  // the renderer paints. bruteHide fires at 6 delays (50/200/500/1000/2000/
+  // 3500 ms) to catch async-loaded Mapbox PMTiles. Tree re-filter at +250
+  // and +1000 ms because the trees IIFE adds new trees ~200 ms post-render.
+  function _registerBruteHideHooks(){
+    if(typeof window.registerRebuildHook !== 'function'){
+      setTimeout(_registerBruteHideHooks, 50);
+      return;
     }
+    // Pre-rebuild: keep trees inside the lot before they're painted
+    window.registerRebuildHook('preRebuild', 'filterTreesToLot', _filterTreesToLot, 12);
+    // Multi-pass post-render brute hide
+    [50, 200, 500, 1000, 2000, 3500].forEach(function(ms){
+      window.registerRebuildHook('postRender', 'bruteHide-' + ms, _bruteHide, ms);
+    });
+    // Re-filter trees as new ones appear async
+    window.registerRebuildHook('postRender', 'filterTreesToLot-250',  _filterTreesToLot, 250);
+    window.registerRebuildHook('postRender', 'filterTreesToLot-1000', _filterTreesToLot, 1000);
   }
+  _registerBruteHideHooks();
   window._bruteHideInLot = _bruteHide;
   window._filterTreesToLot = _filterTreesToLot;
 })();
