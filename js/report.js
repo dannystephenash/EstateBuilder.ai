@@ -280,28 +280,37 @@ async function exportPDF(){
 
   function addTable(headers,rows,startY,opts={}){
     const colW=opts.colWidths||headers.map(()=>cw/headers.length);
+    // Per-column default alignment — 'left' (default) or 'right'. Used by both
+    // header and body; individual body cells can override via cell.align.
+    const colAligns=opts.colAligns||headers.map(()=>'left');
     let ty=startY;
     const lineH = 4.5;            // mm per text line at 8pt
     const cellPad = 2;            // mm inner padding inside a cell
     const minRowH = 6;            // mm minimum row height
 
-    // Header row
+    // Header row — honors colAligns so number-column headers can right-align
+    // above their values (standard finance-table treatment).
     doc.setFillColor(30,30,30);doc.rect(M,ty-4,cw,7,'F');
     doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...OLIVE);
-    let cx=M+2;
+    let cx=M+cellPad;
     headers.forEach((h,i)=>{
       const lines = doc.splitTextToSize(String(h), colW[i] - cellPad*2);
-      doc.text(lines[0]||'', cx, ty);
+      if(colAligns[i] === 'right'){
+        doc.text(lines[0]||'', cx + colW[i] - 2*cellPad, ty, {align:'right'});
+      } else {
+        doc.text(lines[0]||'', cx, ty);
+      }
       cx += colW[i];
     });
     ty += minRowH;
 
-    // Body rows — each cell wraps to its column width; row height grows with longest cell
+    // Body rows — each cell wraps to its column width; row height grows with longest cell.
+    // Per-cell options on object cells: {text, color, style:'bold'|'normal', align:'left'|'right'}.
     doc.setFont('helvetica','normal');doc.setFontSize(8);
     rows.forEach((row,ri)=>{
       // Pre-wrap every cell so we know the max line count for this row
       const cellLines = row.map((cell,ci)=>{
-        const text = (typeof cell === 'object') ? String(cell.text || '') : String(cell == null ? '' : cell);
+        const text = (typeof cell === 'object' && cell !== null) ? String(cell.text || '') : String(cell == null ? '' : cell);
         return doc.splitTextToSize(text, Math.max(8, colW[ci] - cellPad*2));
       });
       const maxLines = Math.max(1, ...cellLines.map(L => L.length));
@@ -323,17 +332,61 @@ async function exportPDF(){
       // Render each cell's wrapped lines vertically within the row
       cx = M + cellPad;
       row.forEach((cell,ci)=>{
-        const colorOverride = (typeof cell === 'object') ? (cell.color || LGREY) : LGREY;
+        const isObj = (typeof cell === 'object' && cell !== null);
+        const colorOverride = isObj ? (cell.color || LGREY) : LGREY;
+        const styleOverride = (isObj && cell.style === 'bold') ? 'bold' : 'normal';
+        const alignOverride = (isObj && cell.align) ? cell.align : colAligns[ci];
+        doc.setFont('helvetica', styleOverride);
         doc.setTextColor(...colorOverride);
         const lines = cellLines[ci];
         for(let li = 0; li < lines.length; li++){
-          doc.text(lines[li], cx, ty + li * lineH);
+          if(alignOverride === 'right'){
+            doc.text(lines[li], cx + colW[ci] - 2*cellPad, ty + li * lineH, {align:'right'});
+          } else {
+            doc.text(lines[li], cx, ty + li * lineH);
+          }
         }
         cx += colW[ci];
       });
       ty += rowH;
     });
     return ty;
+  }
+
+  // pieChart(cx, cy, r, slices) — slices: [{value, color:[r,g,b], label}].
+  // Drawn clockwise from 12 o'clock; each slice approximated by N polygon
+  // segments (fine enough that 25mm radius reads as a smooth arc on print).
+  // Uses doc.lines() with relative coords from the slice's center vertex.
+  function pieChart(cx, cy, r, slices){
+    const total = slices.reduce((s, sl) => s + (sl.value || 0), 0);
+    if(total <= 0) return;
+    let a0 = -Math.PI/2;
+    slices.forEach(sl => {
+      const frac = (sl.value || 0) / total;
+      if(frac <= 0) return;
+      const a1 = a0 + frac * Math.PI * 2;
+      const segs = Math.max(2, Math.round(48 * frac));
+      // Build polygon as relative deltas from the previous point, starting
+      // at the slice's apex (the pie center).
+      const segments = [];
+      let prevX = cx, prevY = cy;
+      for(let i = 0; i <= segs; i++){
+        const t = a0 + (a1 - a0) * (i / segs);
+        const px = cx + r * Math.cos(t);
+        const py = cy + r * Math.sin(t);
+        segments.push([px - prevX, py - prevY]);
+        prevX = px; prevY = py;
+      }
+      // Close back to apex
+      segments.push([cx - prevX, cy - prevY]);
+      doc.setFillColor(...sl.color);
+      doc.lines(segments, cx, cy, [1, 1], 'F', true);
+      a0 = a1;
+    });
+    // Subtle outer ring so the pie reads cleanly on the dark page background
+    doc.setDrawColor(40, 40, 40);
+    doc.setLineWidth(0.4);
+    doc.circle(cx, cy, r, 'S');
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -902,6 +955,8 @@ async function exportPDF(){
   para('The ground floor commercial program assumes a grocery-anchored retail mix, reflecting the neighbourhood demand for walkable daily-needs retail along the the corridor. Net leasable commercial area of '+Math.round(d.netLeasableComm).toLocaleString()+' sf after lobby, loading, and mechanical deductions.');y+=3;
 
   // ══════ PAGE 7: PRO-FORMA ══════
+  // Number columns right-align (finance-table convention) and TOTAL rows
+  // render in bold OLIVE so they read as the punchline of each table.
   newPage();pageTitle('5. DEVELOPMENT PRO-FORMA');
   sectionHead('5.1 Revenue');
   y=addTable(['Source','Amount','$/sf GFA'],[
@@ -909,26 +964,61 @@ async function exportPDF(){
     ['Commercial Value (Cap Rate)',fmtM(d.totalCommValue),'$'+(d.totalCommValue/d.totalGFA).toFixed(0)],
     ['Parking ('+d.parkSpaces+' stalls @ '+fmt$(P.pf.parkPrice)+'/ea)',fmtM(d.parkRev),''],
     ['Lockers ('+d.lockers+' @ '+fmt$(P.pf.lockerPrice)+'/ea)',fmtM(d.lockerRev),''],
-    [{text:'TOTAL GROSS REVENUE',color:OLIVE},{text:fmtM(d.totalGrossRev),color:OLIVE},{text:'$'+(d.totalGrossRev/d.totalGFA).toFixed(0),color:OLIVE}],
-  ],y,{colWidths:[85,45,50]});y+=6;
+    [{text:'TOTAL GROSS REVENUE',color:OLIVE,style:'bold'},
+     {text:fmtM(d.totalGrossRev),color:OLIVE,style:'bold'},
+     {text:'$'+(d.totalGrossRev/d.totalGFA).toFixed(0),color:OLIVE,style:'bold'}],
+  ],y,{colWidths:[85,45,50],colAligns:['left','right','right']});y+=6;
   sectionHead('5.2 Development Costs');
   y=addTable(['Category','Amount','$/sf GFA','% of Total'],[
     ['Land Acquisition',fmtM(d.totalLand),'$'+(d.totalLand/d.totalGFA).toFixed(0),pct(d.totalLand/d.totalCost)],
     ['Hard Construction Costs',fmtM(d.totalHard),'$'+(d.totalHard/d.totalGFA).toFixed(0),pct(d.totalHard/d.totalCost)],
     ['Soft Costs (incl. DCs)',fmtM(d.totalSoft),'$'+(d.totalSoft/d.totalGFA).toFixed(0),pct(d.totalSoft/d.totalCost)],
     ['Financing & Time Costs',fmtM(d.totalFinancing),'$'+(d.totalFinancing/d.totalGFA).toFixed(0),pct(d.totalFinancing/d.totalCost)],
-    [{text:'TOTAL DEVELOPMENT COST',color:OLIVE},{text:fmtM(d.totalCost),color:OLIVE},{text:'$'+(d.totalCost/d.totalGFA).toFixed(0),color:OLIVE},{text:'100%',color:OLIVE}],
-  ],y,{colWidths:[60,40,40,40]});y+=6;
+    [{text:'TOTAL DEVELOPMENT COST',color:OLIVE,style:'bold'},
+     {text:fmtM(d.totalCost),color:OLIVE,style:'bold'},
+     {text:'$'+(d.totalCost/d.totalGFA).toFixed(0),color:OLIVE,style:'bold'},
+     {text:'100%',color:OLIVE,style:'bold'}],
+  ],y,{colWidths:[60,40,40,40],colAligns:['left','right','right','right']});y+=6;
+
+  // ── 5.2.1 Cost Composition pie chart ──
+  // Keeps the four slice colors in the brand's olive family with two
+  // contrasting neutrals so each slice reads distinctly on the dark page.
+  // Pie sits left, legend on the right with $ amount + % share.
+  const _slicePalette = [
+    {color:[174,188,70],  label:'Land Acquisition',  value:d.totalLand},
+    {color:[220,225,160], label:'Hard Construction', value:d.totalHard},
+    {color:[120,135,55],  label:'Soft Costs (DCs)',  value:d.totalSoft},
+    {color:[160,140,100], label:'Financing & Time',  value:d.totalFinancing},
+  ];
+  checkP(70);
+  sectionHead('Cost Composition');
+  const _pieR = 24;
+  const _pieCx = M + _pieR + 4;
+  const _pieCy = y + _pieR + 4;
+  pieChart(_pieCx, _pieCy, _pieR, _slicePalette);
+  // Legend
+  const _legendX = _pieCx + _pieR + 14;
+  let _legendY = y + 6;
+  _slicePalette.forEach(sl => {
+    const frac = d.totalCost > 0 ? sl.value / d.totalCost : 0;
+    doc.setFillColor(...sl.color);
+    doc.rect(_legendX, _legendY - 3, 4, 4, 'F');
+    addText(sl.label,                    _legendX + 7, _legendY,     {size:8.5, color:WHITE});
+    addText(fmtM(sl.value)+'  ·  '+pct(frac), _legendX + 7, _legendY + 4, {size:8,   color:LGREY});
+    _legendY += 11;
+  });
+  y = Math.max(_pieCy + _pieR + 6, _legendY);
+
   sectionHead('5.3 Returns Summary');
   const retCol=d.marginOnCost>=0.15?[100,200,100]:[220,100,100];
   y=addTable(['Metric','Value'],[
     ['Developer Margin',{text:fmtM(d.margin),color:retCol}],
-    ['Profit Margin',{text:pct(d.marginOnCost),color:retCol}],
+    ['Profit Margin',{text:pct(d.marginOnCost),color:retCol,style:'bold'}],
     ['Margin on Revenue',pct(d.marginOnRev)],
-    ['Project IRR (Unlevered)',{text:pct(dcfR.irr),color:[196,154,222]}],
+    ['Project IRR (Unlevered)',{text:pct(dcfR.irr),color:[196,154,222],style:'bold'}],
     ['NPV @ '+pct(P.pf.dcf.discountRate)+' discount',fmtM(dcfR.npv)],
     ['Equity Multiple',dcfR.equityMultiple.toFixed(2)+'×'],
-  ],y,{colWidths:[100,80]});y+=4;
+  ],y,{colWidths:[100,80],colAligns:['left','right']});y+=4;
 
   // ══════ PAGE 7b: AI PRO-FORMA OPTIMIZATION (only if AI was run) ══════
   if(P._aiProforma && !P._aiProforma.raw){
