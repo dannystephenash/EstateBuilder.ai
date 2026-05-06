@@ -143,53 +143,141 @@ function rebuildEnvironment(){
       // Ensure south < north for bbox format [west,south,east,north]
       if(bboxSouth > bboxNorth){ var _tmp=bboxSouth; bboxSouth=bboxNorth; bboxNorth=_tmp; }
 
+      // ── 2×2 TILE-MOSAIC STRATEGY ──────────────────────────────────────
+      // Mapbox Static Images API caps a single request at 1280×1280@2x =
+      // 2560×2560 actual pixels. Spread across the ~2400 m ground extent
+      // that's ~0.94 m/px — visibly chunky when the camera is zoomed in
+      // on the building. Fetching 4 tiles for the 4 quadrants of the
+      // bbox and compositing to a 5120×5120 canvas DOUBLES the linear
+      // resolution (4× more pixels per area, ~0.47 m/px) at the same
+      // ground extent. Combined with anisotropic filtering this gives
+      // a dramatic visible quality bump at oblique camera angles.
+      //
+      // Cost: 4 Mapbox API calls per unique bbox vs. 1 previously.
+      // Mitigated by the bbox-keyed cache — repeat rebuilds at the same
+      // lot reuse the composited canvas without re-fetching.
+      var TILE_PX  = 2560;            // single tile 1280@2x
+      var MOSAIC_PX = TILE_PX * 2;    // 5120
+      var midLng = (bboxWest + bboxEast) / 2;
+      var midLat = (bboxSouth + bboxNorth) / 2;
+      function _tileURL(w, s, e, n){
+        return 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/'
+          + '[' + w.toFixed(6) + ',' + s.toFixed(6) + ','
+          + e.toFixed(6) + ',' + n.toFixed(6) + ']'
+          + '/1280x1280@2x?access_token=' + _satToken;
+      }
+      var quadrants = [
+        // NW (westHalf × northHalf) → top-left of canvas
+        { url: _tileURL(bboxWest, midLat,    midLng,   bboxNorth), dx: 0,        dy: 0        },
+        // NE (eastHalf × northHalf) → top-right
+        { url: _tileURL(midLng,    midLat,    bboxEast, bboxNorth), dx: TILE_PX, dy: 0        },
+        // SW (westHalf × southHalf) → bottom-left
+        { url: _tileURL(bboxWest, bboxSouth, midLng,   midLat),    dx: 0,        dy: TILE_PX },
+        // SE (eastHalf × southHalf) → bottom-right
+        { url: _tileURL(midLng,    bboxSouth, bboxEast, midLat),    dx: TILE_PX, dy: TILE_PX }
+      ];
+      // Single-tile fallback URL — used if the mosaic fetch errors so
+      // the user still sees imagery, just at the lower resolution.
       var satUrl = 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/'
         + '[' + bboxWest.toFixed(6) + ',' + bboxSouth.toFixed(6) + ','
         + bboxEast.toFixed(6) + ',' + bboxNorth.toFixed(6) + ']'
         + '/1280x1280@2x?access_token=' + _satToken;
 
-      console.log('[SAT] Fetching satellite imagery:', bboxWest.toFixed(5), bboxSouth.toFixed(5), bboxEast.toFixed(5), bboxNorth.toFixed(5));
+      console.log('[SAT] Fetching 4-tile ' + MOSAIC_PX + '×' + MOSAIC_PX +
+                  ' mosaic for ' + Math.round(groundSize) + 'm ground extent (' +
+                  (groundSize / MOSAIC_PX).toFixed(2) + ' m/px)');
 
-      var _satKey = [bboxWest,bboxSouth,bboxEast,bboxNorth].map(function(v){return v.toFixed(5);}).join(',');
+      var _satKey = [bboxWest,bboxSouth,bboxEast,bboxNorth].map(function(v){return v.toFixed(5);}).join(',') + '@2x2';
 
-      // Helper: create a fresh texture from an image and apply to ground
-      function _applySatToGround(img, targetMesh){
-        var tex = new THREE.CanvasTexture(img);
+      // Helper: create a fresh texture from an image / canvas with
+      // mipmapping + anisotropic filtering, then apply it to the ground
+      // mesh. Anisotropic filtering is the single biggest perceived-
+      // quality win for ground textures viewed at oblique angles.
+      function _applySatToGround(imgOrCanvas, targetMesh){
+        var tex = new THREE.CanvasTexture(imgOrCanvas);
         tex.encoding = THREE.sRGBEncoding;
-        tex.minFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;   // mipmaps when minified
         tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = true;
+        if(typeof renderer !== 'undefined' && renderer && renderer.capabilities){
+          tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy() || 1);
+        }
         targetMesh.material.dispose();
         targetMesh.material = new THREE.MeshStandardMaterial({map:tex, roughness:0.95, metalness:0.0});
         targetMesh.receiveShadow = true;
-        console.log('[SAT] Satellite texture applied to ground plane');
+        var dim = (imgOrCanvas.width || imgOrCanvas.naturalWidth || 0);
+        console.log('[SAT] Texture applied: ' + dim + '×' + dim +
+                    ', anisotropy=' + tex.anisotropy + ', mipmaps=on');
+      }
+
+      function _findGroundAndApply(imgOrCanvas){
+        var envG = groups.env;
+        if(!envG){ console.warn('[SAT] No env group found'); return; }
+        for(var ci=0; ci<envG.children.length; ci++){
+          var ch = envG.children[ci];
+          if(ch.isMesh && ch.geometry && ch.position.y < 0){
+            _applySatToGround(imgOrCanvas, ch);
+            return;
+          }
+        }
+        console.warn('[SAT] Ground mesh not found in env group');
       }
 
       if(window._satImgCache && window._satImgCache.key === _satKey && window._satImgCache.img){
-        _applySatToGround(window._satImgCache.img, ground);
+        _findGroundAndApply(window._satImgCache.img);
       } else {
         var _fetchId = (window._satFetchId = (window._satFetchId || 0) + 1);
-        var satImg = new Image();
-        satImg.crossOrigin = 'anonymous';
-        satImg.onload = function(){
-          if(_fetchId !== window._satFetchId) return;
-          window._satImgCache = {key: _satKey, img: satImg};
-          console.log('[SAT] Image loaded ('+satImg.naturalWidth+'x'+satImg.naturalHeight+'), applying texture...');
-          // Find the current ground mesh in env group (may have been rebuilt)
-          var envG = groups.env;
-          if(!envG){ console.warn('[SAT] No env group found'); return; }
-          var found = false;
-          for(var ci=0; ci<envG.children.length; ci++){
-            var ch = envG.children[ci];
-            if(ch.isMesh && ch.geometry && ch.position.y < 0){
-              _applySatToGround(satImg, ch);
-              found = true;
-              break;
-            }
+        var loaded = 0;
+        var failed = false;
+        var imgs = new Array(4);
+
+        function _onAllLoaded(){
+          if(_fetchId !== window._satFetchId) return;   // a newer fetch superseded
+          // Composite to canvas at full mosaic resolution
+          var canvas = document.createElement('canvas');
+          canvas.width = MOSAIC_PX;
+          canvas.height = MOSAIC_PX;
+          var ctx = canvas.getContext('2d');
+          for(var i = 0; i < 4; i++){
+            ctx.drawImage(imgs[i], quadrants[i].dx, quadrants[i].dy, TILE_PX, TILE_PX);
           }
-          if(!found) console.warn('[SAT] Ground mesh not found in env group');
-        };
-        satImg.onerror = function(e){ console.error('[SAT] Image load FAILED. URL:', satUrl.substring(0,120)+'...'); };
-        satImg.src = satUrl;
+          window._satImgCache = {key: _satKey, img: canvas};
+          console.log('[SAT] Mosaic composited (' + MOSAIC_PX + '×' + MOSAIC_PX + ')');
+          _findGroundAndApply(canvas);
+        }
+
+        function _fallbackToSingleTile(){
+          if(_fetchId !== window._satFetchId) return;
+          console.warn('[SAT] Falling back to single-tile fetch');
+          var fb = new Image();
+          fb.crossOrigin = 'anonymous';
+          fb.onload = function(){
+            if(_fetchId !== window._satFetchId) return;
+            window._satImgCache = {key: _satKey, img: fb};
+            _findGroundAndApply(fb);
+          };
+          fb.onerror = function(){ console.error('[SAT] Fallback also failed.'); };
+          fb.src = satUrl;
+        }
+
+        quadrants.forEach(function(q, i){
+          var img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = function(){
+            if(_fetchId !== window._satFetchId) return;
+            if(failed) return;
+            imgs[i] = img;
+            loaded++;
+            if(loaded === 4) _onAllLoaded();
+          };
+          img.onerror = function(){
+            if(failed) return;
+            failed = true;
+            console.warn('[SAT] Tile ' + i + ' failed to load.');
+            _fallbackToSingleTile();
+          };
+          img.src = q.url;
+        });
       }
     } catch(e){ console.error('[SAT] Error:', e); }
   }
