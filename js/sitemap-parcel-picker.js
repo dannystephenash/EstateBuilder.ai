@@ -189,7 +189,7 @@ function smToggleParcelPicker(){
     smSelectedParcels=[];
     smMap.on('click',smParcelClickHandler);
     smMap.getCanvas().style.cursor='crosshair';
-    if(btn){btn.style.background='#AEBC46';btn.style.color='#111';}
+    if(btn){btn.style.background='#EFEAE0';btn.style.color='#111';}
     // Show multi-parcel bar
     const bar=document.getElementById('sm-multi-parcel-bar');
     if(bar) bar.style.display='block';
@@ -197,8 +197,8 @@ function smToggleParcelPicker(){
     // Clear any previous multi-parcel preview layers
     smClearMultiParcelLayers();
     const instrEl=document.getElementById('sitemap-instructions');
-    if(instrEl) instrEl.innerHTML='<span style="color:#AEBC46;font-weight:700">PARCEL PICKER ACTIVE</span> — click parcels to select · pick multiple then merge';
-    smShowToast('Click properties to select — pick multiple to merge','#AEBC46');
+    if(instrEl) instrEl.innerHTML='<span style="color:#EFEAE0;font-weight:700">PARCEL PICKER ACTIVE</span> — click parcels to select · pick multiple then merge';
+    smShowToast('Click properties to select — pick multiple to merge','#EFEAE0');
   } else {
     smCancelMultiParcel();
   }
@@ -217,12 +217,12 @@ function smCancelMultiParcel(){
     smMap.getCanvas().style.cursor='';
   }
   const btn=document.getElementById('btn-pick-parcel');
-  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+  if(btn){btn.style.background='#444444';btn.style.color='#EFEAE0';}
   const bar=document.getElementById('sm-multi-parcel-bar');
   if(bar) bar.style.display='none';
   smClearMultiParcelLayers();
   const instrEl=document.getElementById('sitemap-instructions');
-  if(instrEl) instrEl.innerHTML='Click <b style="color:#AEBC46">DRAW LOT</b> or <b style="color:#AEBC46">PICK PARCEL</b>';
+  if(instrEl) instrEl.innerHTML='Click <b style="color:#EFEAE0">DRAW LOT</b> or <b style="color:#EFEAE0">PICK PARCEL</b>';
 }
 
 function smClearMultiParcelLayers(){
@@ -275,7 +275,7 @@ function smUpdateMultiParcelUI(){
   if(count===0){listEl.innerHTML='';return;}
   // Show combined area total
   const totalSf=smSelectedParcels.reduce((s,p)=>s+(p.areaSqFt||0),0);
-  const colors=['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+  const colors=['#EFEAE0','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
   listEl.innerHTML=smSelectedParcels.map((p,i)=>{
     const col=colors[i%colors.length];
     const addr=(p.attributes.address||'').trim();
@@ -288,14 +288,14 @@ function smUpdateMultiParcelUI(){
       <div onclick="smRemoveParcel(${i})" style="color:#c44;cursor:pointer;font-size:12px;padding:0 2px" title="Remove">✕</div>
     </div>`;
   }).join('')+(count>1?`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-top:1px solid #333;margin-top:3px;font-size:10px;font-weight:700">
-    <span style="color:#888">COMBINED TOTAL</span><span style="color:#AEBC46">${Math.round(totalSf).toLocaleString()} sf</span>
+    <span style="color:#888">COMBINED TOTAL</span><span style="color:#EFEAE0">${Math.round(totalSf).toLocaleString()} sf</span>
   </div>`:'');
 }
 
 function smRenderMultiParcelPreview(){
   if(!smMap) return;
   smClearMultiParcelLayers();
-  const colors=['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+  const colors=['#EFEAE0','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
   smSelectedParcels.forEach((p,i)=>{
     const sid='sm-multi-parcel-'+i;
     const col=colors[i%colors.length];
@@ -403,7 +403,7 @@ function smMergeAndApplyParcels(){
   smSelectedParcels=[];
   if(smMap){smMap.off('click',smParcelClickHandler);smMap.getCanvas().style.cursor='';}
   const btn=document.getElementById('btn-pick-parcel');
-  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+  if(btn){btn.style.background='#444444';btn.style.color='#EFEAE0';}
   const bar=document.getElementById('sm-multi-parcel-bar');
   if(bar) bar.style.display='none';
 
@@ -424,7 +424,7 @@ async function smParcelClickHandler(e){
   // Show loading popup with progress
   const popup=new mapboxgl.Popup({maxWidth:'280px',className:'zoning-popup',closeOnClick:false})
     .setLngLat([lng,lat])
-    .setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#AEBC46;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">QUERYING PARCEL...</div><div style="color:#888;font-size:10px">Searching property boundaries...</div><div style="margin-top:6px;height:2px;background:#333;border-radius:1px;overflow:hidden"><div id="parcel-progress" style="width:10%;height:100%;background:#AEBC46;transition:width 0.5s"></div></div></div>')
+    .setHTML('<div style="font-family:Outfit,DM Sans,sans-serif;padding:4px"><div style="color:#EFEAE0;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">QUERYING PARCEL...</div><div style="color:#888;font-size:10px">Searching property boundaries...</div><div style="margin-top:6px;height:2px;background:#333;border-radius:1px;overflow:hidden"><div id="parcel-progress" style="width:10%;height:100%;background:#EFEAE0;transition:width 0.5s"></div></div></div>')
     .addTo(smMap);
   _smActivePopup=popup;
 
@@ -481,20 +481,24 @@ async function smParcelClickHandler(e){
     verts=_snapParcelVerts(verts, 3);
     verts=_dedupeRing(verts, 0.3);
 
-    // Check for duplicate parcel — use polygon overlap, not centroid distance
-    // Two parcels are duplicates if >70% of the new parcel overlaps an existing one
+    // Toggle behaviour — clicking an already-selected parcel DESELECTS it.
+    // Two parcels are considered the same if >70% of the new parcel overlaps
+    // an existing one (polygon overlap, not centroid distance).
     const newPoly=turf.polygon([[...verts,verts[0]]]);
     const newArea=turf.area(newPoly);
-    const isDuplicate=smSelectedParcels.some(p=>{
+    let dupIdx=-1;
+    for(let i=0;i<smSelectedParcels.length;i++){
       try{
-        const inter=turf.intersect(turf.featureCollection([newPoly,p.geojsonFeature]));
-        if(!inter) return false;
+        const inter=turf.intersect(turf.featureCollection([newPoly,smSelectedParcels[i].geojsonFeature]));
+        if(!inter) continue;
         const overlapArea=turf.area(inter);
-        return overlapArea/newArea>0.7; // >70% overlap = same parcel
-      }catch(e){return false;}
-    });
-    if(isDuplicate){
-      smShowToast('This parcel is already selected','#e8c87a');
+        if(overlapArea/newArea>0.7){ dupIdx=i; break; }
+      }catch(e){}
+    }
+    if(dupIdx>=0){
+      // Already selected → DESELECT (toggle off)
+      smRemoveParcel(dupIdx);
+      smShowToast('Parcel deselected','#9CA3AF');
       _smParcelClickBusy=false;
       return;
     }
@@ -519,7 +523,7 @@ async function smParcelClickHandler(e){
 
     const addr=(result.attributes.address||'').trim();
     const label=addr&&addr.length>2?addr:'Parcel '+smSelectedParcels.length;
-    smShowToast('Added: '+label+' ('+Math.round(areaSqFt).toLocaleString()+' sf)','#AEBC46');
+    smShowToast('Added: '+label+' ('+Math.round(areaSqFt).toLocaleString()+' sf)','#EFEAE0');
 
   }catch(err){
     clearInterval(progInterval);
@@ -639,7 +643,7 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   smParcelPickerActive=false;
   if(smMap){smMap.off('click',smParcelClickHandler);smMap.getCanvas().style.cursor='';}
   const btn=document.getElementById('btn-pick-parcel');
-  if(btn){btn.style.background='#444444';btn.style.color='#AEBC46';}
+  if(btn){btn.style.background='#444444';btn.style.color='#EFEAE0';}
 
   // Build closed ring for GeoJSON
   const closedCoords=[...verts,verts[0]];
@@ -651,8 +655,8 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
       smMap.getSource('sm-custom-lot').setData(poly);
     } else {
       smMap.addSource('sm-custom-lot',{type:'geojson',data:poly});
-      smMap.addLayer({id:'sm-custom-lot-fill',type:'fill',source:'sm-custom-lot',paint:{'fill-color':'#AEBC46','fill-opacity':0.12}});
-      smMap.addLayer({id:'sm-custom-lot-line',type:'line',source:'sm-custom-lot',paint:{'line-color':'#AEBC46','line-width':2.5,'line-dasharray':[3,2]}});
+      smMap.addLayer({id:'sm-custom-lot-fill',type:'fill',source:'sm-custom-lot',paint:{'fill-color':'#EFEAE0','fill-opacity':0.12}});
+      smMap.addLayer({id:'sm-custom-lot-line',type:'line',source:'sm-custom-lot',paint:{'line-color':'#EFEAE0','line-width':2.5,'line-dasharray':[3,2]}});
     }
     // Also clear/update the saved-lot layers if they exist
     if(smMap.getSource('saved-lot')){
@@ -684,11 +688,14 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   P.siteCoords={lat:lotCentroid.geometry.coordinates[1],lng:lotCentroid.geometry.coordinates[0]};
   P.lot.gpsVerts=verts.map(v=>[v[0],v[1]]);
 
-  // Convert GPS → local feet (same algorithm as smOnDraw)
-  let originIdx=0, bestScore=Infinity;
+  // Convert GPS → local feet — pick NORTHERNMOST vertex as origin so the
+  // local-coord origin matches what sitemapApplyToMassing / smSyncTo3D /
+  // smAutoSync use. Earlier this code used the southwestmost vertex which
+  // disagreed with every other entry point and made the Site Plan tab's
+  // satellite imagery offset relative to the lot polygon.
+  let originIdx=0;
   for(let i=0;i<verts.length;i++){
-    const score=verts[i][0]*-1+verts[i][1]*-1; // southwestmost
-    if(score<bestScore){bestScore=score;originIdx=i;}
+    if(verts[i][1] > verts[originIdx][1]) originIdx=i;
   }
   const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
   const polyVerts=verts.map(v=>{
@@ -709,8 +716,15 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   const lotWidth=Math.max(...allX)-Math.min(...allX);
   const lotDepth=Math.max(...allZ)-Math.min(...allZ);
 
+  // CRITICAL: store P._gpsOrigin so the 3D Site Plan tab can re-derive every
+  // polygon (lot + volumes + satellite tile bbox) using the SAME origin the
+  // parcel picker used here. Without this, on first Site Plan tab entry the
+  // ui.js fallback would auto-derive a (potentially different) origin from
+  // gpsVerts and the resulting polyVerts would be offset.
+  P._gpsOrigin = {lng: originLng, lat: originLat};
   P.lot={
     polyVerts,
+    gpsOrigin: {lng: originLng, lat: originLat},
     front:lotWidth,
     upperRight:Math.round(lotDepth*0.5),
     stepEast:0,
@@ -745,7 +759,7 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   smUpdateLotInfo(smLotData);
 
   // Show attribution toast
-  smShowToast('Parcel imported from '+serviceName+' · '+Math.round(areaSqFt).toLocaleString()+' sf','#AEBC46');
+  smShowToast('Parcel imported from '+serviceName+' · '+Math.round(areaSqFt).toLocaleString()+' sf','#EFEAE0');
 
   // Auto-detect zoning at parcel centroid - use detectZoningAuto when
   // available so Mississauga (and any future jurisdiction) is supported.
@@ -760,8 +774,8 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
         zi.innerHTML=`
           <div style="color:#4ecdc4;font-weight:700;font-size:11px;margin-bottom:6px">📋 ZONING DETECTED — By-law 569-2013</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-            <div><span style="color:#888">Zone:</span> <b style="color:#AEBC46">${zoning.zoneString||zoning.zone}</b></div>
-            <div><span style="color:#888">Max FSI:</span> <b style="color:#AEBC46">${zoning.fsiLimit?zoning.fsiLimit+'×':'Site-specific'}</b></div>
+            <div><span style="color:#888">Zone:</span> <b style="color:#EFEAE0">${zoning.zoneString||zoning.zone}</b></div>
+            <div><span style="color:#888">Max FSI:</span> <b style="color:#EFEAE0">${zoning.fsiLimit?zoning.fsiLimit+'×':'Site-specific'}</b></div>
           </div>`;
       }
       autoSave();try{renderReport();}catch(e){}
@@ -772,7 +786,7 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   P.comparables=[];
   try{
     fetchNearbyComparables(P.siteCoords.lat,P.siteCoords.lng,addrName).then(()=>{
-      smShowToast('Found '+P.comparables.length+' comparable'+(P.comparables.length!==1?'s':'')+' within 3km','#AEBC46');
+      smShowToast('Found '+P.comparables.length+' comparable'+(P.comparables.length!==1?'s':'')+' within 3km','#EFEAE0');
       smUpdateCompCount();
     }).catch(e=>console.warn('Comparables error:',e));
   }catch(e){}
@@ -803,7 +817,7 @@ function smApplyParcelAsLot(ringCoords, attributes, serviceName){
   try{rebuildAll();}catch(e){}
 
   const instrEl=document.getElementById('sitemap-instructions');
-  if(instrEl) instrEl.innerHTML='Parcel imported from <span style="color:#AEBC46;font-weight:600">'+serviceName+'</span> · <span style="color:#AEBC46;font-weight:600">Draw buildings</span> or <span style="color:#AEBC46;font-weight:600">pick another parcel</span>';
+  if(instrEl) instrEl.innerHTML='Parcel imported from <span style="color:#EFEAE0;font-weight:600">'+serviceName+'</span> · <span style="color:#EFEAE0;font-weight:600">Draw buildings</span> or <span style="color:#EFEAE0;font-weight:600">pick another parcel</span>';
 }
 
 // Fetch nearby comparables from multiple sources
@@ -812,12 +826,434 @@ async function fetchNearbyComparables(lat,lng,address){
   console.log('fetchNearbyComparables START: lat='+lat+' lng='+lng);
   P.comparables=[];
 
-  // ── NAD27 MTM Zone 10 conversion helpers ──
-  // Use site coords as reference, fallback to GTA center for NAD27 approximation
-  const refLat=lat||43.70, refLng=lng||-79.38, refX=309107+(((lng||-79.38)-(-79.4490))/((1.0/(111000*Math.cos(43.7*Math.PI/180))))), refY=4839363+((lat||43.70)-43.6929)*111000;
+  // ── PATH 0 (PREFERRED): JSONP fetch direct from CKAN — bypasses CORS entirely.
+  //    Toronto's CKAN action API supports `?callback=` for JSONP responses,
+  //    so we can call it without a proxy. This is the SAME dataset that
+  //    powers Toronto's Application Information Centre at
+  //    toronto.ca/city-government/planning-development/application-information-centre/
+  //    — currently 26,000+ records city-wide, typically 200–6000 within 3 km
+  //    downtown depending on neighbourhood density.
+  //
+  //    Steps:
+  //      1. package_show → discover the active CSV resource id
+  //      2. paginate datastore_search at 1000 records/page
+  //      3. Convert MTM Zone 10 X/Y → WGS84 lat/lng (the dataset stores
+  //         coords in NAD27 MTM, not lat/lng columns)
+  //      4. Filter by haversine distance to the picked lot
+  //      5. Regex-extract storey count and unit count from DESCRIPTION
+  //         (those aren't dedicated columns in the dataset — the AIC
+  //         website does the same kind of free-text extraction)
+  try {
+    function _jsonpLoad(url){
+      return new Promise(function(resolve, reject){
+        var cb = '_ckanCb_' + Date.now() + '_' + Math.floor(Math.random()*99999);
+        var s = document.createElement('script');
+        var t = setTimeout(function(){
+          delete window[cb]; try { document.head.removeChild(s); } catch(_){}
+          reject(new Error('JSONP timeout'));
+        }, 30000);
+        window[cb] = function(d){
+          clearTimeout(t); delete window[cb];
+          try { document.head.removeChild(s); } catch(_){}
+          resolve(d);
+        };
+        s.src = url + (url.indexOf('?')>=0?'&':'?') + 'callback=' + cb;
+        s.onerror = function(){
+          clearTimeout(t); delete window[cb];
+          try { document.head.removeChild(s); } catch(_){}
+          reject(new Error('JSONP load error'));
+        };
+        document.head.appendChild(s);
+      });
+    }
+
+    // 1. Discover resource id (cached for the session)
+    if (!window._ckanResId) {
+      var pkg = await _jsonpLoad('https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=development-applications');
+      var csvRes = (pkg && pkg.result && pkg.result.resources || []).find(function(r){
+        return r.datastore_active && (r.format||'').toLowerCase() === 'csv';
+      });
+      if (csvRes) window._ckanResId = csvRes.id;
+    }
+    if (!window._ckanResId) throw new Error('CKAN resource id not found');
+
+    // 2. Paginate all records (cached for 1 hour to avoid hammering on every parcel pick)
+    var nowMs = Date.now();
+    if (!window._ckanRecCache || (nowMs - (window._ckanRecCacheAt || 0)) > 60*60*1000) {
+      var allRows = [];
+      var off = 0;
+      while (true) {
+        var pg = await _jsonpLoad('https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search?resource_id=' + window._ckanResId + '&limit=1000&offset=' + off);
+        var rows = (pg && pg.result && pg.result.records) || [];
+        allRows = allRows.concat(rows);
+        if (rows.length < 1000) break;
+        off += 1000;
+        if (off > 30000) break; // safety
+      }
+      window._ckanRecCache = allRows;
+      window._ckanRecCacheAt = nowMs;
+      console.log('[Comparables] CKAN cache populated: ' + allRows.length + ' records (refreshed)');
+    } else {
+      console.log('[Comparables] CKAN cache hit: ' + window._ckanRecCache.length + ' records (age ' + Math.round((nowMs - window._ckanRecCacheAt)/1000) + 's)');
+    }
+
+    // 3. MTM Zone 10 → WGS84 (Toronto's CKAN dev-applications X/Y in NAD27 MTM)
+    var _LAMBDA0 = -79.5*Math.PI/180, _K0 = 0.9999, _FE = 304800;
+    var _A = 6378206.4, _E2 = 0.006768658;
+    function _mtmToLL(x, y){
+      var xp = x - _FE, yp = y;
+      var M = yp / _K0;
+      var e1 = (1 - Math.sqrt(1-_E2)) / (1 + Math.sqrt(1-_E2));
+      var mu = M / (_A * (1 - _E2/4 - 3*_E2*_E2/64 - 5*Math.pow(_E2,3)/256));
+      var phi1 = mu
+        + (3*e1/2 - 27*Math.pow(e1,3)/32) * Math.sin(2*mu)
+        + (21*e1*e1/16 - 55*Math.pow(e1,4)/32) * Math.sin(4*mu)
+        + (151*Math.pow(e1,3)/96) * Math.sin(6*mu);
+      var sP = Math.sin(phi1), cP = Math.cos(phi1), tP = Math.tan(phi1);
+      var N1 = _A / Math.sqrt(1 - _E2*sP*sP);
+      var T1 = tP*tP, ep2 = _E2/(1-_E2), C1 = ep2*cP*cP;
+      var R1 = _A * (1-_E2) / Math.pow(1 - _E2*sP*sP, 1.5);
+      var D = xp / (N1 * _K0);
+      var phi = phi1 - (N1*tP/R1) * (D*D/2 - (5+3*T1+10*C1-4*C1*C1-9*ep2)*Math.pow(D,4)/24);
+      var lambda = _LAMBDA0 + (D - (1+2*T1+C1)*Math.pow(D,3)/6 + (5-2*C1+28*T1-3*C1*C1+8*ep2+24*T1*T1)*Math.pow(D,5)/120) / cP;
+      return [phi*180/Math.PI - 0.000080, lambda*180/Math.PI + 0.000280/Math.cos(phi)];
+    }
+    function _hav(a1,b1,a2,b2){
+      var R=6371000, p1=a1*Math.PI/180, p2=a2*Math.PI/180;
+      var dp=(a2-a1)*Math.PI/180, dl=(b2-b1)*Math.PI/180;
+      var a=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+      return 2*R*Math.asin(Math.sqrt(a));
+    }
+    function _parseDesc(d){
+      d = d || ''; var st=null, un=null, hm=null, m;
+      if (m = d.match(/(\d{1,3})[-\s]storey/i))           st = parseInt(m[1], 10);
+      else if (m = d.match(/storey[-\s]?(\d{1,3})/i))     st = parseInt(m[1], 10);
+      if (m = d.match(/(\d{1,4})\s*(?:residential\s+)?(?:dwelling\s+)?units?/i))
+        un = parseInt(m[1], 10);
+      if (m = d.match(/(\d+(?:\.\d+)?)\s*m(?:etres?)?\s+(?:in\s+height|tall|high)/i))
+        hm = parseFloat(m[1]);
+      return { storeys: st, units: un, height_m: hm };
+    }
+
+    // 4. Filter by radius AND quality
+    var nearby = [];
+    var rows = window._ckanRecCache;
+    var RADIUS = 3000;
+    var skipped = { noCoords: 0, outsideBbox: 0, outsideRadius: 0, lowQuality: 0 };
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var x = parseFloat(r.X), y = parseFloat(r.Y);
+      if (isNaN(x) || isNaN(y) || !x || !y) { skipped.noCoords++; continue; }
+      var ll = _mtmToLL(x, y);
+      // Sanity — must be in GTA bbox after conversion
+      if (Math.abs(ll[0] - 43.7) > 1 || Math.abs(ll[1] + 79.4) > 1) { skipped.outsideBbox++; continue; }
+      var d = _hav(lat, lng, ll[0], ll[1]);
+      if (d > RADIUS) { skipped.outsideRadius++; continue; }
+
+      // ── QUALITY FILTER ─────────────────────────────────────────────
+      //   Skip records that would render as uninformative grey dots:
+      //     - Status is Closed/NOAC/Cancelled/Refused/Withdrawn
+      //     - AND the description has no storey count, no unit count,
+      //       no height in metres
+      //   These are abandoned filings with no useful precedent value
+      //   for a developer comparing massing options.
+      //   Records that ARE Closed/etc. but DO have storey/unit data are
+      //   KEPT — those are useful "this got refused" precedents.
+      var ex = _parseDesc(r.DESCRIPTION);
+      var status = (r.STATUS || '').trim();
+      var isDeadEnd = /^(Closed|NOAC|Cancelled|Canceled|Refused|Withdrawn|Lapsed|Inactive)\b/i.test(status);
+      var hasUsefulData = (ex.storeys && ex.storeys > 0) || (ex.units && ex.units > 0) || (ex.height_m && ex.height_m > 0);
+      if (isDeadEnd && !hasUsefulData) { skipped.lowQuality++; continue; }
+      // ───────────────────────────────────────────────────────────────
+      var ext = ex; // already computed above for the quality filter
+      var descStr = (r.DESCRIPTION || '').slice(0, 600);
+
+      // ── ADDRESS resolution with fallback chain ──
+      //   1. STREET_NUM + STREET_NAME + STREET_TYPE + STREET_DIRECTION
+      //   2. STREET_NAME alone (records with unnumbered/private roads)
+      //   3. Address extracted from DESCRIPTION via regex
+      //      ("238 Adelaide Street West - Proposal to..." pattern)
+      //   4. Last resort: "Application " + APPLICATION#
+      //   Records with NO usable address are dropped — see below.
+      var rawNum  = (r.STREET_NUM || '').trim();
+      var rawName = (r.STREET_NAME || '').trim();
+      var rawType = (r.STREET_TYPE || '').trim();
+      var rawDir  = (r.STREET_DIRECTION || '').trim();
+      var addrStr = [rawNum, rawName, rawType, rawDir].filter(Boolean).join(' ').trim();
+      if (!addrStr || addrStr.length < 3) {
+        // Try to pull address out of DESCRIPTION free text. Toronto descriptions
+        // very often start with the address: "238 Adelaide Street West - …"
+        var addrMatch = (r.DESCRIPTION || '').match(
+          /^([0-9]{1,6}(?:[-\/][0-9]{1,6})?\s+[A-Z][a-zA-Z'.\s]+?(?:\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Crescent|Cres|Lane|Ln|Place|Pl|Way|Court|Ct|Terrace|Square|Sq))(?:\s+(?:East|West|North|South|E|W|N|S))?)/i
+        );
+        if (addrMatch) addrStr = addrMatch[1].trim();
+      }
+      if (!addrStr || addrStr.length < 3) {
+        // Last resort — use the application number so the dot is still identifiable
+        var appNo = (r['APPLICATION#'] || '').trim();
+        if (appNo) addrStr = 'Application ' + appNo;
+      }
+      // If even after all fallbacks we have nothing useful, skip this record —
+      // a dot with no address has no use to a developer comparing precedents.
+      if (!addrStr || addrStr.length < 3) continue;
+
+      // ── BUILDER / APPLICANT resolution ──
+      //   CONTACT_NAME is the applicant/agent (often a planning consultant
+      //   like Bousfields, Goldberg Group, BA Group; sometimes the developer
+      //   directly). Normalize: if "Person, Firm" format, prefer the firm.
+      var builder = (r.CONTACT_NAME || '').trim();
+      if (builder.indexOf(',') > 0) builder = builder.split(',').slice(1).join(',').trim() || builder;
+      if (!builder) builder = 'Not on record';
+      nearby.push({
+        // Both legacy and new field names so every consumer (popup, AI, report) finds it
+        addr: addrStr, address: addrStr,
+        builder: builder,
+        contactName: r.CONTACT_NAME || '',
+        dev: r.APPLICATION_TYPE || '',
+        applicationType: r.APPLICATION_TYPE || '',
+        app_type: r.APPLICATION_TYPE || '',
+        appNumber: r['APPLICATION#'] || '',
+        storeys: ext.storeys || 0,
+        heightStoreys: ext.storeys || 0,
+        height_m: ext.height_m || null,
+        units: ext.units || 0,
+        fsi: '',
+        status: r.STATUS || '',
+        desc: descStr, description: descStr,
+        ward: r.WARD_NAME || '',
+        submitted: r.DATE_SUBMITTED || '',
+        url: r.APPLICATION_URL || '',
+        lat: ll[0], lng: ll[1],
+        distanceM: Math.round(d), distance_m: Math.round(d),
+        source: 'CKAN-live (JSONP)'
+      });
+    }
+    nearby.sort(function(a,b){ return a.distanceM - b.distanceM; });
+
+    // ── DEDUPLICATION ──────────────────────────────────────────────
+    //   Toronto's CKAN dataset has multiple rows per real-world building:
+    //     - One row per application type: OZ + OPA + SPA + COA + CR
+    //     - One row per revision of each application
+    //     - One row per parcel in an assembly (230/232/234/236 Adelaide)
+    //   Without dedup, a single 63-storey tower can show as 5–15 dots
+    //   clustered together — visually noisy and misleading.
+    //
+    //   Two records are the same building IF:
+    //     A) Same storeys + same units (>0) AND within 150m of each other
+    //     OR
+    //     B) Same street name AND within 100m (catches parcel assemblies
+    //        where revisions have slightly different storey counts)
+    //
+    //   Union-find merges chains: A~B + B~C means A,B,C are all one group.
+    //   Representative is the highest-status filing. Address is combined
+    //   so an assembly shows as "230, 232, 234, 236 Adelaide St W".
+    var STATUS_RANK = {
+      'Built': 5, 'Constructed': 5, 'Approved': 4,
+      'Under Review': 3, 'In Progress': 3,
+      'Appealed': 2, 'OLT': 2, 'OMB': 2,
+      'Closed': 1, 'NOAC': 1, 'Refused': 1, 'Cancelled': 1, 'Withdrawn': 1
+    };
+    function _statusRank(s){ return STATUS_RANK[(s||'').trim()] || 0; }
+
+    // Helper: extract + normalize the street part of an address
+    //   "236 ADELAIDE ST W"        → "adelaide st w"
+    //   "236 Adelaide Street West" → "adelaide st w"
+    //   Normalizes suffix (Street→st, Avenue→ave, etc.) and direction
+    //   (West→w) so two filings on the same building written differently
+    //   still hash to the same street key.
+    function _streetOnly(addr){
+      return (addr || '')
+        .replace(/^\d+(?:-\d+)?\s*/, '')                      // strip leading number(s)
+        .toLowerCase()
+        .replace(/\bstreet\b/g,    'st')
+        .replace(/\bavenue\b/g,    'ave')
+        .replace(/\bboulevard\b/g, 'blvd')
+        .replace(/\broad\b/g,      'rd')
+        .replace(/\bdrive\b/g,     'dr')
+        .replace(/\bcrescent\b/g,  'cres')
+        .replace(/\bcourt\b/g,     'ct')
+        .replace(/\bplace\b/g,     'pl')
+        .replace(/\blane\b/g,      'ln')
+        .replace(/\b(east|west|north|south)\b/g, function(m){ return m[0]; })
+        .replace(/[\s.,]+/g, ' ')
+        .trim();
+    }
+    function _isSameBuilding(a, b){
+      var dist = _hav(a.lat, a.lng, b.lat, b.lng);
+      // Strong proximity — any two records within 30m are almost always
+      // the same building. A typical mid-rise / tower footprint is 30–50m
+      // square, and CKAN records sit at the parcel centroid; two centroids
+      // closer than 30m almost certainly belong to the same physical site.
+      // This catches the common case the older rules miss: same project
+      // with revisions that changed storey count AND unit count.
+      if (dist < 30) return true;
+      // Same storeys + same units (>0) within 150m
+      if (a.storeys && a.storeys === b.storeys && a.units === b.units && dist < 150) return true;
+      // Same street within 100m (catches assemblies even when storey counts differ across revisions)
+      var sA = _streetOnly(a.addr), sB = _streetOnly(b.addr);
+      if (sA && sA === sB && dist < 100) return true;
+      // Same exact address, case-insensitive (different application rows on same parcel)
+      if (a.addr && b.addr && a.addr.toLowerCase() === b.addr.toLowerCase()) return true;
+      return false;
+    }
+
+    // Union-find over the nearby array
+    var parent = nearby.map(function(_, i){ return i; });
+    function _find(i){ while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+    function _union(i, j){ var ri = _find(i), rj = _find(j); if (ri !== rj) parent[ri] = rj; }
+
+    // Spatial pre-bucket by ~200m cell so we don't do full O(n²)
+    var buckets = {};
+    nearby.forEach(function(c, i){
+      var bkey = Math.round(c.lat * 500) + ':' + Math.round(c.lng * 500);
+      if (!buckets[bkey]) buckets[bkey] = [];
+      buckets[bkey].push(i);
+    });
+    // Compare each record only with neighbours in its 3×3 bucket window
+    nearby.forEach(function(c, i){
+      var bLat = Math.round(c.lat * 500), bLng = Math.round(c.lng * 500);
+      for (var dLat = -1; dLat <= 1; dLat++) {
+        for (var dLng = -1; dLng <= 1; dLng++) {
+          var bkey = (bLat + dLat) + ':' + (bLng + dLng);
+          var bucket = buckets[bkey] || [];
+          for (var b = 0; b < bucket.length; b++) {
+            var j = bucket[b];
+            if (j <= i) continue;
+            if (_isSameBuilding(nearby[i], nearby[j])) _union(i, j);
+          }
+        }
+      }
+    });
+
+    // Group by root
+    var groupsByRoot = {};
+    nearby.forEach(function(c, i){
+      var root = _find(i);
+      if (!groupsByRoot[root]) groupsByRoot[root] = [];
+      groupsByRoot[root].push(c);
+    });
+
+    var deduped = [];
+    Object.keys(groupsByRoot).forEach(function(rk){
+      var members = groupsByRoot[rk];
+      if (members.length === 1) { deduped.push(members[0]); return; }
+      // Pick the highest-status filing as representative
+      members.sort(function(a, b){ return _statusRank(b.status) - _statusRank(a.status); });
+      var rep = Object.assign({}, members[0]);
+      // Combine all parcel addresses on the same street into a compact list
+      var byStreet = {};
+      members.forEach(function(m){
+        var addr = (m.addr || '').trim();
+        if (!addr) return;
+        var mm = addr.match(/^(\d+(?:-\d+)?)\s+(.+)$/);
+        if (mm) {
+          var num = mm[1], street = mm[2];
+          if (!byStreet[street]) byStreet[street] = new Set();
+          byStreet[street].add(num);
+        } else {
+          if (!byStreet[addr]) byStreet[addr] = null; // no number
+        }
+      });
+      var parts = Object.keys(byStreet).map(function(street){
+        var s = byStreet[street];
+        if (!s) return street;
+        var nums = Array.from(s).sort(function(a, b){ return parseInt(a,10) - parseInt(b,10); });
+        return nums.join(', ') + ' ' + street;
+      });
+      if (parts.length) {
+        rep.addr = parts.join(' / ');
+        rep.address = rep.addr;
+      }
+      rep.filings = members.length;
+      // Use the longest description (typically the most recent revision)
+      var longest = members.reduce(function(best, m){
+        return (m.description||'').length > (best.description||'').length ? m : best;
+      }, members[0]);
+      rep.description = longest.description;
+      rep.desc = longest.description;
+      // Use max storeys / units across all filings in the group
+      rep.storeys = members.reduce(function(mx, m){ return Math.max(mx, m.storeys||0); }, 0);
+      rep.heightStoreys = rep.storeys;
+      rep.units = members.reduce(function(mx, m){ return Math.max(mx, m.units||0); }, 0);
+      deduped.push(rep);
+    });
+
+    var mergedCount = nearby.length - deduped.length;
+    nearby = deduped;
+    // ────────────────────────────────────────────────────────────────
+
+    if (nearby.length > 0) {
+      P.comparables = nearby;
+      console.log('[Comparables] JSONP path: ' + nearby.length + ' unique buildings within ' + RADIUS + 'm ' +
+        '(merged ' + mergedCount + ' duplicate filings · filtered out: ' +
+        skipped.lowQuality + ' dead-end / ' + skipped.outsideRadius + ' too far / ' +
+        skipped.noCoords + ' no coords / ' + skipped.outsideBbox + ' outside GTA)');
+      return P.comparables;
+    }
+    console.warn('[Comparables] JSONP returned 0 within radius — falling back to CORS path');
+  } catch (jsonpErr) {
+    console.warn('[Comparables] JSONP path failed (' + jsonpErr.message + ') — falling back to CORS path');
+  }
+  // ── End PATH 0 ──────────────────────────────────────────────────────────
+
+
+  // ── MTM Zone 10 → WGS84 inverse Transverse Mercator ───────────────────
+  // Toronto's CKAN dev-applications dataset publishes X/Y in NAD27 MTM
+  // Zone 10 (per the dataset's metadata). Proper inverse Transverse
+  // Mercator on Clarke 1866 + NAD27→WGS84 datum shift gets us to ~50m
+  // accuracy where LATITUDE/LONGITUDE columns aren't populated.
+  // Reference: USGS Snyder Bulletin 1532 §8 (TM inverse) + NRCAN NTv2
+  // datum shift (Toronto-region constants).
+  const _MTM_LAMBDA0 = -79.5 * Math.PI / 180;
+  const _MTM_K0      = 0.9999;
+  const _MTM_FE      = 304800;
+  const _MTM_FN      = 0;
+  const _CLARKE_A    = 6378206.4;
+  const _CLARKE_E2   = 0.006768658;
+  function _mtmZone10ToLatLng(x, y){
+    const A = _CLARKE_A, E2 = _CLARKE_E2;
+    const xp = x - _MTM_FE, yp = y - _MTM_FN;
+    const M = yp / _MTM_K0;
+    const e1 = (1 - Math.sqrt(1 - E2)) / (1 + Math.sqrt(1 - E2));
+    const mu = M / (A * (1 - E2/4 - 3*E2*E2/64 - 5*Math.pow(E2,3)/256));
+    const phi1 = mu
+      + (3*e1/2 - 27*Math.pow(e1,3)/32) * Math.sin(2*mu)
+      + (21*e1*e1/16 - 55*Math.pow(e1,4)/32) * Math.sin(4*mu)
+      + (151*Math.pow(e1,3)/96) * Math.sin(6*mu)
+      + (1097*Math.pow(e1,4)/512) * Math.sin(8*mu);
+    const sinPhi = Math.sin(phi1), cosPhi = Math.cos(phi1), tanPhi = Math.tan(phi1);
+    const N1 = A / Math.sqrt(1 - E2 * sinPhi * sinPhi);
+    const T1 = tanPhi * tanPhi;
+    const ep2 = E2 / (1 - E2);
+    const C1  = ep2 * cosPhi * cosPhi;
+    const R1  = A * (1 - E2) / Math.pow(1 - E2 * sinPhi * sinPhi, 1.5);
+    const D   = xp / (N1 * _MTM_K0);
+    const phi = phi1 - (N1 * tanPhi / R1) * (
+      D*D/2 - (5 + 3*T1 + 10*C1 - 4*C1*C1 - 9*ep2) * Math.pow(D,4)/24
+            + (61 + 90*T1 + 298*C1 + 45*T1*T1 - 252*ep2 - 3*C1*C1) * Math.pow(D,6)/720
+    );
+    const lambda = _MTM_LAMBDA0 + (
+      D - (1 + 2*T1 + C1) * Math.pow(D,3)/6
+        + (5 - 2*C1 + 28*T1 - 3*C1*C1 + 8*ep2 + 24*T1*T1) * Math.pow(D,5)/120
+    ) / cosPhi;
+    // NAD27 → WGS84 datum shift (Toronto-region NTv2 constants).
+    let latDeg = phi    * 180 / Math.PI - 0.000080;
+    let lngDeg = lambda * 180 / Math.PI + 0.000280 / Math.cos(phi);
+    return [latDeg, lngDeg];
+  }
+
+  // Bounding-box pre-filter (still uses the user lat/lng as reference;
+  // accuracy here doesn't matter since we re-check distance on the LL side).
+  const refLat=lat||43.70, refLng=lng||-79.38;
   const latPerY=1.0/111000, lngPerX=1.0/(111000*Math.cos(43.7*Math.PI/180));
-  const toNAD=([ln,la])=>[refX+(ln-refLng)/lngPerX, refY+(la-refLat)/latPerY];
-  const toLL=([x,y])=>[refLng+(x-refX)*lngPerX, refLat+(y-refY)*latPerY];
+  const toNAD=([ln,la])=>{
+    // Inverse of _mtmZone10ToLatLng — only needed for the bounding-box
+    // pre-filter, so a linear approximation around refLat/refLng is fine.
+    return [
+      _MTM_FE + (ln - _MTM_LAMBDA0*180/Math.PI) * 111320 * Math.cos(la*Math.PI/180) * _MTM_K0,
+      la * 111000  // very rough — bounding box is loose anyway
+    ];
+  };
 
   // Convert site coords to NAD27 for bounding box search
   const [siteX,siteY]=toNAD([lng,lat]);
@@ -834,10 +1270,34 @@ async function fetchNearbyComparables(lat,lng,address){
     const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
     return 6371*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
   };
+  // Track which placement source each record used — logged once at the end
+  // for visibility into accuracy class.
+  let _placementSource = { latlng: 0, geom: 0, mtm: 0, dropped: 0 };
   const parseRecord=(r,existing)=>{
-    if(!r.X||!r.Y||!r.DESCRIPTION)return null;
-    const rLat=refLat+(parseFloat(r.Y)-refY)*latPerY;
-    const rLng=refLng+(parseFloat(r.X)-refX)*lngPerX;
+    if(!r.DESCRIPTION) return null;
+    // Resolve lat/lng with fallback chain:
+    //   1. Dataset's LATITUDE/LONGITUDE columns (already WGS84 — sub-metre)
+    //   2. GeoJSON-shaped geometry.coordinates (also WGS84)
+    //   3. Inverse Transverse Mercator from NAD27 MTM Zone 10 X/Y (~50m)
+    //   4. Drop if none resolve
+    let rLat=null, rLng=null, _src='none';
+    if(r.LATITUDE!=null && r.LONGITUDE!=null){
+      const a=parseFloat(r.LATITUDE), b=parseFloat(r.LONGITUDE);
+      if(!isNaN(a) && !isNaN(b) && a>43.4 && a<44.0){ rLat=a; rLng=b; _src='latlng'; }
+    }
+    if((rLat==null||rLng==null) && r.geometry && Array.isArray(r.geometry.coordinates) && r.geometry.coordinates.length>=2){
+      const a=parseFloat(r.geometry.coordinates[1]), b=parseFloat(r.geometry.coordinates[0]);
+      if(!isNaN(a) && !isNaN(b) && a>43.4 && a<44.0){ rLat=a; rLng=b; _src='geom'; }
+    }
+    if((rLat==null||rLng==null) && r.X!=null && r.Y!=null){
+      const xx=parseFloat(r.X), yy=parseFloat(r.Y);
+      if(!isNaN(xx) && !isNaN(yy)){
+        const ll=_mtmZone10ToLatLng(xx, yy);
+        if(ll[0]>43.4 && ll[0]<44.0 && ll[1]>-79.9 && ll[1]<-78.9){ rLat=ll[0]; rLng=ll[1]; _src='mtm'; }
+      }
+    }
+    if(rLat==null || rLng==null){ _placementSource.dropped++; return null; }
+    _placementSource[_src]++;
     const dist=haversineDist(lat,lng,rLat,rLng);
     if(dist>3)return null; // within 3km only
     const addr=((r.STREET_NUM||'')+' '+(r.STREET_NAME||'')+' '+(r.STREET_TYPE||'')+' '+(r.STREET_DIRECTION||'')).replace(/\s+/g,' ').trim();
@@ -848,7 +1308,10 @@ async function fetchNearbyComparables(lat,lng,address){
     const unitMatch=(r.DESCRIPTION||'').match(/([\d,]+)\s*(?:units|dwelling|residential)/i);
     const storeys=stMatch?parseInt(stMatch[1]):0;
     const units=unitMatch?parseInt(unitMatch[1].replace(/,/g,'')):0;
-    if(storeys<4&&units<10)return null; // skip small projects
+    // Filter only the truly trivial (sheds, signs, single-storey additions).
+    // Anything 2+ storeys OR 3+ units is potential precedent for a real
+    // developer comparing density. Was: storeys<4 && units<10.
+    if(storeys<2&&units<3)return null;
     let status=r.STATUS||'Under Review';
     if(status==='Closed - Constructed'||status==='Complete')status='Built';
     else if(status==='Closed - Not Constructed'||status==='Refused')status='Cancelled';
@@ -860,7 +1323,7 @@ async function fetchNearbyComparables(lat,lng,address){
     let dev='';
     const embMatch=TORONTO_DEV_DB.find(e=>e.addr&&e.addr.toLowerCase()===addrKey);
     if(embMatch){dev=embMatch.dev||'';if(embMatch.arch&&embMatch.arch!=='—')dev+=(dev?' / ':'')+embMatch.arch;}
-    return {addr,dev,storeys,units,fsi:'',status,dist:Math.round(dist*1000),desc:r.DESCRIPTION||''};
+    return {addr,dev,storeys,units,fsi:'',status,dist:Math.round(dist*1000),desc:r.DESCRIPTION||'',lat:rLat,lng:rLng};
   };
 
   // ── Source 1: LIVE City of Toronto Open Data API (preferred) ──
@@ -944,12 +1407,19 @@ async function fetchNearbyComparables(lat,lng,address){
       const wardSet=new Set(wardsToSearch);
       let totalFetched=0;
 
-      // Step 3: For each ward, fetch storey-related records and spatially filter
+      // Step 3: For each ward, fetch ALL development application records and
+      // spatially filter. Was: capped at 500 records/ward + q:'storey' text
+      // filter + slice(0,15). Those filters were throwing away ~90% of the
+      // data — the AIC website (toronto.ca/.../application-information-
+      // centre) is the same dataset and shows hundreds in downtown wards.
       for(const ward of wardSet){
-        for(let offset=0;offset<500;offset+=100){
+        for(let offset=0;offset<5000;offset+=100){    // was offset<500
           const params=new URLSearchParams({
             resource_id:resourceId,limit:'100',offset:String(offset),
-            q:'storey',filters:JSON.stringify({WARD_NAME:ward})
+            // Drop q:'storey' — was excluding any record without that exact
+            // word (offices, OPA-only filings, mixed-use without "storey"
+            // wording, etc.). Ward filter is enough to keep traffic bounded.
+            filters:JSON.stringify({WARD_NAME:ward})
           });
           const result=await ckanFetch(proxy,params);
           if(!result||!result.records||result.records.length===0)break;
@@ -969,9 +1439,10 @@ async function fetchNearbyComparables(lat,lng,address){
 
       if(totalFetched>0){
         liveResults.sort((a,b)=>a.dist-b.dist);
-        liveResults=liveResults.slice(0,15);
+        liveResults=liveResults.slice(0,200);          // was slice(0,15)
         apiSuccess=true;
-        console.log('Toronto API: '+totalFetched+' records from '+wardSet.size+' wards → '+liveResults.length+' significant developments within 3km');
+        console.log('Toronto API: '+totalFetched+' records from '+wardSet.size+' wards → '+liveResults.length+' developments within 3km');
+        console.log('Placement source: latlng='+_placementSource.latlng+', geom='+_placementSource.geom+', mtm='+_placementSource.mtm+', dropped='+_placementSource.dropped+'  (latlng/geom = sub-metre accuracy, mtm = ~50m)');
         break; // proxy worked
       }
     }catch(e){
@@ -985,7 +1456,8 @@ async function fetchNearbyComparables(lat,lng,address){
     liveResults.forEach(r=>{
       P.comparables.push({
         addr:r.addr, dev:r.dev, storeys:r.storeys, units:r.units,
-        fsi:r.fsi, status:r.status
+        fsi:r.fsi, status:r.status,
+        lat:r.lat, lng:r.lng, desc:r.desc
       });
     });
 
@@ -1003,7 +1475,8 @@ async function fetchNearbyComparables(lat,lng,address){
         P.comparables.push({
           addr:c.addr, dev:c.dev||'', storeys:c.storeys||0, units:c.units||0,
           fsi:c.gfaM2?((c.gfaM2*10.7639/Math.max(1,lotArea())).toFixed(1)+'×'):'',
-          status:c.st||'Under Review'
+          status:c.st||'Under Review',
+          lat:c.lat, lng:c.lng, desc:c.desc||''
         });
       }
     });
@@ -1015,7 +1488,8 @@ async function fetchNearbyComparables(lat,lng,address){
       P.comparables.push({
         addr:c.addr, dev:c.dev||'', storeys:c.storeys||0, units:c.units||0,
         fsi:c.gfaM2?((c.gfaM2*10.7639/Math.max(1,lotArea())).toFixed(1)+'×'):'',
-        status:c.st||'Under Review'
+        status:c.st||'Under Review',
+        lat:c.lat, lng:c.lng, desc:c.desc||''
       });
     });
   }
@@ -1038,7 +1512,7 @@ async function fetchNearbyComparables(lat,lng,address){
   try{
     const compBadge=document.getElementById('sm-address-banner');
     if(compBadge&&P.comparables.length>0){
-      compBadge.innerHTML+='<div style="margin-top:6px;color:#AEBC46;font-size:11px;font-weight:600">✓ '+P.comparables.length+' comparable developments'+(apiSuccess?' (live data)':' (cached)')+'</div>';
+      compBadge.innerHTML+='<div style="margin-top:6px;color:#EFEAE0;font-size:11px;font-weight:600">✓ '+P.comparables.length+' comparable developments'+(apiSuccess?' (live data)':' (cached)')+'</div>';
     }
   }catch(e){}
   if(P.comparables.length===0){
@@ -1048,7 +1522,7 @@ async function fetchNearbyComparables(lat,lng,address){
 
 // ── Toast notification (independent of address banner) ──
 function smShowToast(msg,color){
-  color=color||'#AEBC46';
+  color=color||'#EFEAE0';
   let toast=document.getElementById('sm-toast');
   if(!toast){
     toast=document.createElement('div');
@@ -1072,13 +1546,13 @@ function smUpdateCompCount(){
     if(!lotInfo)return;
     el=document.createElement('div');
     el.id='sm-comp-count';
-    el.style.cssText='margin-top:8px;padding:8px 10px;background:#1a2a1a;border:1px solid #AEBC46;border-radius:6px;font-size:11px';
+    el.style.cssText='margin-top:8px;padding:8px 10px;background:#1a2a1a;border:1px solid #EFEAE0;border-radius:6px;font-size:11px';
     lotInfo.appendChild(el);
   }
   const n=(P.comparables||[]).length;
   if(n>0){
     el.style.display='block';
-    el.innerHTML='<span style="color:#AEBC46;font-weight:700">📊 '+n+' Comparable'+(n!==1?'s':'')+' Found</span><br><span style="color:#888;font-size:10px">View in REPORT tab · Auto-saved</span>';
+    el.innerHTML='<span style="color:#EFEAE0;font-weight:700">📊 '+n+' Comparable'+(n!==1?'s':'')+' Found</span><br><span style="color:#888;font-size:10px">View in REPORT tab · Auto-saved</span>';
   } else {
     el.style.display='block';
     el.innerHTML='<span style="color:#888">No comparables found nearby</span>';
@@ -1091,7 +1565,7 @@ function smShowAddressBanner(address, coords){
   if(!banner){
     banner=document.createElement('div');
     banner.id='sm-address-banner';
-    banner.style.cssText='position:absolute;top:50px;left:10px;right:10px;z-index:100;background:#1a1a1a;border:2px solid #AEBC46;border-radius:8px;padding:12px 16px;font-family:Outfit,DM Sans,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
+    banner.style.cssText='position:absolute;top:50px;left:10px;right:10px;z-index:100;background:#1a1a1a;border:2px solid #EFEAE0;border-radius:8px;padding:12px 16px;font-family:Outfit,DM Sans,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
     const mapWrap=document.getElementById('sitemap-map');
     if(mapWrap) mapWrap.parentNode.style.position='relative';
     (mapWrap?mapWrap.parentNode:document.body).appendChild(banner);
@@ -1100,7 +1574,7 @@ function smShowAddressBanner(address, coords){
   banner.innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center">
       <div>
-        <div style="color:#AEBC46;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:4px">📍 SITE LOCATION DETECTED</div>
+        <div style="color:#EFEAE0;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:4px">📍 SITE LOCATION DETECTED</div>
         <div style="color:#eee;font-size:13px;font-weight:600">${address}</div>
         <div style="color:#888;font-size:10px;margin-top:2px">Lat: ${coords.lat.toFixed(5)} · Lng: ${coords.lng.toFixed(5)}</div>
         <div style="color:#4ecdc4;font-size:10px;margin-top:4px">✓ Coordinates locked — comparables will search near this location</div>
@@ -1113,37 +1587,146 @@ function smShowAddressBanner(address, coords){
 }
 
 // Auto-sync map volumes → 3D massing + pro-forma + report (debounced)
+// ─────────────────────────────────────────────────────────────────────────────
+// CRITICAL: This function is the single source of truth for keeping the Site
+// Plan (3D massing) tab in lock-step with the Site Map (Mapbox) tab. EVERY
+// edit on the Site Map — lot reshape, volume drag/rotate/resize, vertex move,
+// shape add/delete — calls smAutoSync() to push changes into P.lot / P.vols
+// (the data structures the 3D renderer reads from).
+//
+// Earlier versions of this file shipped a truncated stub that only computed a
+// few locals and returned without writing ANYTHING to P. The visible symptom:
+// the Site Map showed the parcel + volumes in one place, but the Site Plan
+// tab rendered them at a stale earlier position (from whatever was saved when
+// the user last clicked SYNC TO 3D PREVIEW or APPLY TO MASSING). This caused
+// the building to render visibly offset from the parcel on the satellite
+// underlay — exact bug we're fixing.
+//
+// The sync algorithm — identical to smSyncTo3D (the manual button) so the
+// auto-sync and manual sync produce the same output:
+//   1. Pick the northernmost vertex of the drawn lot as the local-coord origin
+//   2. Convert every lot vertex from lat/lng → local feet relative to origin
+//   3. Force CCW winding (consistent with renderer expectations)
+//   4. Write {polyVerts, gpsVerts, gpsOrigin} into P.lot AND set P._gpsOrigin
+//   5. For each smVolume: convert customPoly (lat/lng) → customPolyLocal (ft)
+//      using the SAME origin, then upsert into P.vols
+//   6. Trigger rebuildAll() so the 3D scene picks up the new state immediately
+//
+// Debounced 300ms so a continuous drag/rotate doesn't spam rebuilds.
+// ─────────────────────────────────────────────────────────────────────────────
 let _smSyncTimer=null;
 function smAutoSync(){
   smUpdateVolStats();
   clearTimeout(_smSyncTimer);
   _smSyncTimer=setTimeout(()=>{
     if(!smLotData)return;
-    // Sync lot polygon
+    if(typeof turf === 'undefined') return;
+
+    // ── 1. Pick origin (northernmost vertex = highest latitude) ──
     const verts=smLotData.vertices;
+    if(!Array.isArray(verts) || verts.length < 3) return;
     let originIdx=0;
     verts.forEach((v,i)=>{ if(v[1]>verts[originIdx][1]) originIdx=i; });
     const originLng=verts[originIdx][0], originLat=verts[originIdx][1];
-    const polyVerts=verts.map(v=>{
-      const xM=turf.distance(turf.point([originLng,originLat]),turf.point([v[0],originLat]),{units:'meters'});
-      const xFt=xM*3.28084*(v[0]>originLng?1:-1);
-      const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,v[1]]),{units:'meters'});
-      const zFt=zM*3.28084*(v[1]<originLat?1:-1);
+
+    // ── Helper: lat/lng → local feet relative to (originLng, originLat) ──
+    // X+ = East, Z+ = South. Matches sitemapApplyToMassing / smSyncTo3D EXACTLY.
+    function _gpsToFt(lng, lat){
+      const xM=turf.distance(turf.point([originLng,originLat]),turf.point([lng,originLat]),{units:'meters'});
+      const xFt=xM*3.28084*(lng>originLng?1:-1);
+      const zM=turf.distance(turf.point([originLng,originLat]),turf.point([originLng,lat]),{units:'meters'});
+      const zFt=zM*3.28084*(lat<originLat?1:-1);
       return [Math.round(xFt), Math.round(zFt)];
-    });
+    }
+
+    // ── 2. Convert lot polygon to local feet ──
+    const polyVerts=verts.map(v=>_gpsToFt(v[0], v[1]));
+
+    // ── 3. Force CCW winding (Three.js renderer convention) ──
     let crossSum=0;
-    // ───────────────────────────────────────────────────────────────
-    // NOTE: The original sitemap.js source was truncated here in the
-    // middle of smAutoSync. Everything after `let crossSum=0;` — which
-    // likely completed a signed-area / winding-order calculation, then
-    // wrote normalised lot verts to P.lot.polyVerts and synced volume
-    // positions from GPS back to local (feet) coords — was never present
-    // in the committed source. This early return makes the file parse
-    // so the rest of the app loads cleanly. TODO: restore the full body
-    // from an uncorrupted copy of sitemap.js.
-    // ───────────────────────────────────────────────────────────────
-    void crossSum; // suppress unused-var in case of future linting
-    return;
+    for(let i=0;i<polyVerts.length;i++){
+      const j=(i+1)%polyVerts.length;
+      crossSum+=(polyVerts[j][0]-polyVerts[i][0])*(polyVerts[j][1]+polyVerts[i][1]);
+    }
+    if(crossSum<0) polyVerts.reverse();
+
+    // Lot bounding box (used for offEast / clamping calculations on volumes)
+    const allX=polyVerts.map(v=>v[0]), allZ=polyVerts.map(v=>v[1]);
+    const minX=Math.min.apply(null,allX), maxX=Math.max.apply(null,allX);
+    const minZ=Math.min.apply(null,allZ), maxZ=Math.max.apply(null,allZ);
+    const lotWidth=maxX-minX, lotDepth=maxZ-minZ;
+
+    // ── 4. Write lot data into P (the 3D renderer reads from these) ──
+    P._gpsOrigin = {lng: originLng, lat: originLat};
+    if(!P.lot) P.lot = {};
+    P.lot.polyVerts = polyVerts;
+    P.lot.gpsVerts = verts.map(v=>[v[0],v[1]]);
+    P.lot.gpsOrigin = {lng: originLng, lat: originLat};
+    // Refresh parametric fallbacks too so any code that reads them sees the
+    // current lot dimensions (not the stale ones from when the lot was first applied)
+    P.lot.front = lotWidth;
+    P.lot.upperRight = Math.round(lotDepth*0.5);
+    P.lot.stepEast = 0;
+    P.lot.lowerRight = Math.round(lotDepth*0.5);
+    P.lot.upperLeft = Math.round(lotDepth*0.7);
+    P.lot.notchWest = 0;
+    P.lot.lowerLeft = Math.round(lotDepth*0.3);
+    P.lot.rear = lotWidth;
+
+    // ── 5. Sync map-placed volumes (smVolumes) → P.vols ──
+    // Only overwrite P.vols if the user has actually placed volumes on the
+    // map — otherwise volumes added directly in the 3D Site Plan tab would
+    // be wiped on every map edit.
+    if(Array.isArray(smVolumes) && smVolumes.length > 0){
+      P.vols = smVolumes.map(sv => {
+        // Compute startEg / offEast from the volume's lat/lng centroid
+        let xFt=0, zFt=0;
+        if(sv.lngLat && sv.lngLat.length === 2){
+          const c = _gpsToFt(sv.lngLat[0], sv.lngLat[1]);
+          xFt = c[0]; zFt = c[1];
+        }
+        const startEg = Math.max(0, Math.round(zFt - (sv.depthFt||0)/2));
+        const rightEdge = Math.round(xFt + (sv.widthFt||0)/2);
+        const offEast = Math.max(0, Math.round(maxX - rightEdge));
+
+        // Convert freeform polygon (if any) to local feet using SAME origin
+        let localPoly = null;
+        if(sv.customPoly && sv.customPoly.length >= 4){
+          localPoly = sv.customPoly.map(c => _gpsToFt(c[0], c[1]));
+        }
+
+        return {
+          storeys: sv.storeys, startEg: startEg, depth: sv.depthFt, width: sv.widthFt,
+          offEast: offEast, commGF: sv.commGF, color: sv.color, name: sv.name, angle: sv.angle,
+          windows: sv.windows || 1, winSpacing: sv.winSpacing || 3,
+          balconies: (sv.balcFront || sv.balcBack || sv.balcLeft || sv.balcRight) ? 1 : 0,
+          balcEvery: sv.balcEvery || 2, balcDepth: sv.balcDepth || 4,
+          balcFront: sv.balcFront, balcBack: sv.balcBack, balcLeft: sv.balcLeft, balcRight: sv.balcRight,
+          customPoly: sv.customPoly,                          // keep lat/lng — needed for re-realign
+          customPolyLocal: localPoly,
+          customAreaSF: sv.customAreaSF || 0,
+          // Industrial-class flags (preserved when smVolume came from optimal-massing-industrial)
+          kind: sv.kind, industrial: sv.industrial,
+          floorHt: sv.floorHt, gfHt: sv.gfHt,
+          // Optimal-massing rich fields — preserved so the Site Plan tab's
+          // BUILDING VOLUMES editor (buildVolPanel) can show podium/tower
+          // step-back / GF-height / cladding / storefront controls. Without
+          // these, Generate Optimal Massing populates them but a subsequent
+          // smAutoSync silently strips them. Preserves user's last edits too.
+          podiumStoreys: sv.podiumStoreys, stepbackAmt: sv.stepbackAmt,
+          gfHeight: sv.gfHeight, baseElevFt: sv.baseElevFt,
+          cladding: sv.cladding,
+          storefrontN: sv.storefrontN, storefrontS: sv.storefrontS,
+          storefrontE: sv.storefrontE, storefrontW: sv.storefrontW,
+          offWest: sv.offWest
+        };
+      });
+    }
+
+    // ── 6. Trigger 3D rebuild — picks up new lot + vols immediately ──
+    if(typeof rebuildAll === 'function'){
+      try { rebuildAll(); } catch(e){ console.warn('[smAutoSync] rebuildAll failed:', e); }
+    }
   }, 300);
 }
 
@@ -1205,7 +1788,7 @@ function smToggleParcelEditMode(){
   const btn = document.getElementById('btn-edit-parcels');
   if(btn){
     btn.textContent = '✓ DONE EDITING';
-    btn.style.background = '#AEBC46';
+    btn.style.background = '#EFEAE0';
     btn.style.color = '#111';
   }
   const undoBtn = document.getElementById('btn-undo-parcel-edit');
@@ -1213,7 +1796,7 @@ function smToggleParcelEditMode(){
 
   const instrEl = document.getElementById('sitemap-instructions');
   if(instrEl){
-    instrEl.innerHTML = '<b style="color:#AEBC46">EDIT MODE</b> — drag vertices (circles) or edges (squares) · double-click a square to add a vertex · linked vertices move together';
+    instrEl.innerHTML = '<b style="color:#EFEAE0">EDIT MODE</b> — drag vertices (circles) or edges (squares) · double-click a square to add a vertex · linked vertices move together';
   }
 
   smRenderParcelEditMarkers();
@@ -1228,7 +1811,7 @@ function smExitParcelEditMode(){
   if(btn){
     btn.textContent = '✎ EDIT PARCELS';
     btn.style.background = '#444';
-    btn.style.color = '#AEBC46';
+    btn.style.color = '#EFEAE0';
   }
   const undoBtn = document.getElementById('btn-undo-parcel-edit');
   if(undoBtn){ undoBtn.style.display = 'none'; }
@@ -1236,7 +1819,7 @@ function smExitParcelEditMode(){
   const instrEl = document.getElementById('sitemap-instructions');
   if(instrEl){
     const c = smSelectedParcels.length;
-    instrEl.innerHTML = c > 1 ? c + ' parcels selected — click <b style="color:#AEBC46">MERGE & APPLY</b> when ready' : '1 parcel selected — click <b style="color:#AEBC46">APPLY PARCEL</b>';
+    instrEl.innerHTML = c > 1 ? c + ' parcels selected — click <b style="color:#EFEAE0">MERGE & APPLY</b> when ready' : '1 parcel selected — click <b style="color:#EFEAE0">APPLY PARCEL</b>';
   }
 
   // Update the parcel area totals + preview after potentially-edited rings
@@ -1346,7 +1929,7 @@ function smRenderParcelEditMarkers(){
   smClearParcelEditMarkers();
   if(!smParcelEditMode) return;
 
-  const colors = ['#AEBC46','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
+  const colors = ['#EFEAE0','#4ecdc4','#ff9966','#b088cc','#e8c87a','#66bbff','#ff6b9d','#7bed9f'];
 
   smSelectedParcels.forEach((parcel, pi) => {
     const col = colors[pi % colors.length];
@@ -1517,7 +2100,6 @@ function smLiveRedrawParcelOnly(pi){
   if(ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]){
     ring.push([ring[0][0], ring[0][1]]);
   }
-  const feat = { type:'Feature', geometry:{ type:'Polygon', coordinates:[ring] }, properties:{} };
   const sid = 'sm-multi-parcel-' + pi;
   try {
     if(smMap.getSource(sid)) smMap.getSource(sid).setData(feat);

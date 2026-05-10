@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>OleaDev — Massing Builder</title>
+<title>EstateBuilder.ai — Massing Builder</title>
 <!-- ── External libraries ──
      SRI (Subresource Integrity) hashes applied where verifiable via npm registry.
      The api.mapbox.com URLs lack SRI hashes because Mapbox's CDN bundles could not
@@ -86,12 +86,30 @@ window.__clearLotAndReload = function(){
 <div id="panel">
   <div id="panel-resize"></div>
   <div id="panel-inner">
-    <div class="brand">OLEADEV <span id="eb-ver" style="font-size:8px;color:#AEBC46;opacity:0.6;margin-left:6px">v4.0-ENGINE</span></div>
-    <h1 id="project-title" contenteditable="true" spellcheck="false" style="cursor:text;outline:none;border-bottom:1px dashed transparent" onfocus="this.style.borderBottomColor='#AEBC46'" onblur="this.style.borderBottomColor='transparent';P.projectName=this.textContent.trim();document.title='OleaDev — '+P.projectName;autoSave();">Untitled Project</h1>
+    <div class="brand" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <img src="assets/logo.png" alt="" class="brand-logo" style="height:48px;width:auto;display:block;filter:invert(1);transition:filter 200ms ease" />
+      <span style="color:#FFFFFF;font-weight:600;font-size:15px;letter-spacing:-0.01em;font-family:'Outfit','Inter',system-ui,sans-serif">EstateBuilder.ai</span>
+      <span id="eb-ver" style="font-size:9px;color:#FFFFFF;opacity:0.35;font-family:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace;letter-spacing:0.5px">v4.0</span>
+      <button onclick="openSettingsModal()" id="btn-brand-settings" title="API keys + appearance" style="margin-left:auto;background:rgba(245,241,236,0.06);border:1px solid rgba(245,241,236,0.14);color:#F5F1EC;padding:6px 12px;border-radius:8px;font-family:'Outfit','Inter',system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:0.3px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:background 120ms,border-color 120ms" onmouseover="this.style.background='rgba(245,241,236,0.12)';this.style.borderColor='rgba(245,241,236,0.30)'" onmouseout="this.style.background='rgba(245,241,236,0.06)';this.style.borderColor='rgba(245,241,236,0.14)'">
+        <span style="font-size:13px;line-height:1">⚙</span>
+        <span>Settings</span>
+        <span id="settings-key-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:#10B981;margin-left:2px" title="Keys connected"></span>
+      </button>
+    </div>
+    <h1 id="project-title" contenteditable="true" spellcheck="false" style="cursor:text;outline:none;border-bottom:1px dashed transparent;color:#FFFFFF;font-family:'Outfit','Inter',system-ui,sans-serif;font-weight:500" onfocus="this.style.borderBottomColor='#FFFFFF'" onblur="this.style.borderBottomColor='transparent';P.projectName=this.textContent.trim();document.title='EstateBuilder.ai — '+P.projectName;autoSave();">Untitled Project</h1>
+
+    <!-- MY PROJECTS — list of all projects on disk, switch with one click -->
+    <div style="margin:6px 0 12px;padding:8px 10px;background:#13131A;border:1px solid #2A2A35;border-radius:6px;display:flex;align-items:center;gap:8px">
+      <label style="font-size:11px;color:#9CA3AF;font-weight:700;letter-spacing:1.5px;white-space:nowrap">PROJECTS</label>
+      <select id="project-picker" onchange="if(this.value)switchProject(this.value)" style="flex:1;background:#0A0A0F;color:#F5F1EC;border:1px solid #2A2A35;border-radius:4px;padding:6px 8px;font-family:'Outfit','Inter',system-ui,sans-serif;font-size:12px;cursor:pointer">
+        <option value="">— Loading projects from disk —</option>
+      </select>
+      <button onclick="newProject()" title="Start a new blank project" style="background:rgba(245,241,236,0.06);border:1px solid rgba(245,241,236,0.14);color:#F5F1EC;padding:6px 10px;border-radius:4px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:0.3px">+ NEW</button>
+    </div>
 
     <!-- DEVELOPMENT TYPE SELECTOR -->
     <div style="margin:8px 0 12px;padding:8px 10px;background:#1a1a1a;border:1px solid #333;border-radius:6px;display:flex;align-items:center;gap:10px">
-      <label style="font-size:12px;color:#AEBC46;font-weight:700;letter-spacing:1.5px;white-space:nowrap">ASSET CLASS</label>
+      <label style="font-size:12px;color:#F5F1EC;font-weight:700;letter-spacing:1.5px;white-space:nowrap">ASSET CLASS</label>
       <select id="project-type-select" class="project-select" style="flex:1;margin:0">
         <option value="midrise">Mixed-Use Mid-Rise (5-12 storeys)</option>
         <option value="highrise">Mixed-Use High-Rise (13+ storeys)</option>
@@ -123,19 +141,20 @@ window.__clearLotAndReload = function(){
 
     <!-- ═══ TAB: SITE MAP ═══ -->
     <div id="tab-sitemap" class="tab-content active">
-      <div id="sitemap-token" style="margin-bottom:12px">
-        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter your <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:#AEBC46">Mapbox token</a> (free) to load satellite map:</div>
-        <div style="display:flex;gap:6px">
-          <input type="text" id="mapbox-token" placeholder="pk.eyJ1Ij..." style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:8px 10px;border-radius:4px;font-size:12px;font-family:inherit">
-          <button class="btn-add" style="width:auto;padding:8px 16px" onclick="initSiteMap()">LOAD MAP</button>
-        </div>
+
+      <!-- Pre-map onboarding bar — only shown until the map first loads -->
+      <div id="sitemap-token" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn-add" style="width:auto;padding:8px 14px;font-size:11px;letter-spacing:1px" onclick="initSiteMap()">▶ LOAD MAP</button>
+        <span style="font-size:11px;color:#888">Need a Mapbox token? Click <strong style="color:#F5F1EC">Settings</strong> at the top.</span>
+        <!-- Hidden legacy input — settings modal pushes the saved Mapbox token here so initSiteMap() still works -->
+        <input type="hidden" id="mapbox-token" />
       </div>
       <div id="sitemap-controls" style="display:none">
 
         <!-- ═══ UNDO BAR ═══ -->
         <div style="display:flex;gap:6px;margin-bottom:8px">
           <button class="btn-add" id="btn-site-undo" onclick="siteUndo()"
-            style="flex:1;background:#2a2a2a;color:#AEBC46;border:1px solid #444;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none"
+            style="flex:1;background:#2a2a2a;color:#F5F1EC;border:1px solid #444;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none"
             title="Nothing to undo">↶ UNDO LAST CHANGE</button>
         </div>
 
@@ -144,35 +163,35 @@ window.__clearLotAndReload = function(){
           <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#888;margin-bottom:8px">LOT DEFINITION</div>
           <div style="display:flex;gap:6px;margin-bottom:6px">
             <button class="btn-add" onclick="sitemapDraw()" style="flex:1;font-size:11px;padding:8px 10px">✏️ DRAW LOT</button>
-            <button class="btn-add" id="btn-pick-parcel" onclick="smToggleParcelPicker()" style="flex:1;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">🏠 PICK PARCEL</button>
+            <button class="btn-add" id="btn-pick-parcel" onclick="smToggleParcelPicker()" style="flex:1;background:#444444;color:#F5F1EC;font-size:11px;padding:8px 10px">🏠 PICK PARCEL</button>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="btn-add" id="btn-edit-lot" onclick="smToggleEditLot()" style="flex:1;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">📌 EDIT LOT</button>
+            <button class="btn-add" id="btn-edit-lot" onclick="smToggleEditLot()" style="flex:1;background:#444444;color:#F5F1EC;font-size:11px;padding:8px 10px">📌 EDIT LOT</button>
             <!-- Bulletproof clear: minimal inline JS that always works -->
             <button class="btn-del" id="btn-clear-lot" onclick="window.__clearLotAndReload()" style="flex:1;font-size:11px;padding:8px 10px;display:none">✕ CLEAR LOT</button>
           </div>
         </div>
 
         <!-- ═══ MULTI-PARCEL SELECTION BAR (hidden until active) ═══ -->
-        <div id="sm-multi-parcel-bar" style="display:none;background:linear-gradient(135deg,#1a2a10,#1a1a1a);border:1.5px solid #AEBC46;border-radius:8px;padding:10px;margin-bottom:10px">
+        <div id="sm-multi-parcel-bar" style="display:none;background:linear-gradient(135deg,#1a1a1a,#0F0F11);border:1.5px solid rgba(245,241,236,0.25);border-radius:8px;padding:10px;margin-bottom:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
             <div style="display:flex;align-items:center;gap:6px">
               <span style="font-size:14px">📦</span>
               <div>
-                <div style="font-size:11px;font-weight:700;color:#AEBC46;letter-spacing:0.5px">MULTI-PARCEL SELECT</div>
+                <div style="font-size:11px;font-weight:700;color:#F5F1EC;letter-spacing:0.5px">MULTI-PARCEL SELECT</div>
                 <div id="sm-multi-parcel-count" style="font-size:12px;color:#888;margin-top:1px">Click parcels to add them</div>
               </div>
             </div>
-            <div id="sm-parcel-badge" style="background:#AEBC46;color:#111;font-size:12px;font-weight:800;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center">0</div>
+            <div id="sm-parcel-badge" style="background:#F5F1EC;color:#111;font-size:12px;font-weight:800;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center">0</div>
           </div>
           <div id="sm-selected-parcels-list" style="max-height:120px;overflow-y:auto;margin-bottom:8px"></div>
           <div style="display:flex;gap:6px;margin-bottom:6px">
-            <button class="btn-add" onclick="smToggleParcelEditMode()" id="btn-edit-parcels" style="flex:1;background:#444;color:#AEBC46;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none" title="Drag vertices/edges to align with neighbours, snaps within 5ft">✎ EDIT PARCELS</button>
-            <button class="btn-add" onclick="smUndoParcelEdit()" id="btn-undo-parcel-edit" style="flex:0 0 auto;background:#444;color:#AEBC46;font-size:11px;padding:8px 12px;opacity:0.4;pointer-events:none;display:none" title="Undo last vertex/edge edit">↶ UNDO EDIT</button>
+            <button class="btn-add" onclick="smToggleParcelEditMode()" id="btn-edit-parcels" style="flex:1;background:#444;color:#F5F1EC;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none" title="Drag vertices/edges to align with neighbours, snaps within 5ft">✎ EDIT PARCELS</button>
+            <button class="btn-add" onclick="smUndoParcelEdit()" id="btn-undo-parcel-edit" style="flex:0 0 auto;background:#444;color:#F5F1EC;font-size:11px;padding:8px 12px;opacity:0.4;pointer-events:none;display:none" title="Undo last vertex/edge edit">↶ UNDO EDIT</button>
           </div>
           <div style="display:flex;gap:6px">
             <button class="btn-add" onclick="smMergeAndApplyParcels()" id="btn-merge-parcels" style="flex:1;font-size:11px;padding:8px 10px;opacity:0.4;pointer-events:none">🔗 MERGE & APPLY</button>
-            <button class="btn-add" onclick="smUndoLastParcel()" id="btn-undo-parcel" style="flex:0 0 auto;background:#444;color:#AEBC46;font-size:11px;padding:8px 12px;opacity:0.4;pointer-events:none">↩ UNDO</button>
+            <button class="btn-add" onclick="smUndoLastParcel()" id="btn-undo-parcel" style="flex:0 0 auto;background:#444;color:#F5F1EC;font-size:11px;padding:8px 12px;opacity:0.4;pointer-events:none">↩ UNDO</button>
             <button class="btn-add" onclick="smCancelMultiParcel()" style="flex:0 0 auto;background:#c44;color:#fff;font-size:11px;padding:8px 12px">✕</button>
           </div>
         </div>
@@ -195,53 +214,67 @@ window.__clearLotAndReload = function(){
 
         <!-- ═══ SECTION: LOT ANALYSIS (shown after lot is drawn/picked) ═══ -->
         <div id="sitemap-lot-info" style="display:none">
-          <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
-            <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">LOT ANALYSIS</div>
-            <div id="sitemap-metrics"></div>
-            <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#888;margin:10px 0 6px;padding-bottom:4px;border-bottom:1px solid #333333">EDGE DIMENSIONS</div>
-            <div id="sitemap-edges"></div>
-          </div>
-
-          <!-- ═══ ZONING & AI ═══ -->
-          <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
-            <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">ZONING ESTIMATES</div>
-            <div id="sitemap-zoning"></div>
-            <div style="margin-top:10px">
-              <button class="sec3d-btn" onclick="requestAI('zoning-analysis')" style="width:100%;padding:7px 12px;font-size:13px">🔍 AI ZONING ANALYSIS</button>
+          <!-- Collapsible: Lot Analysis -->
+          <div class="sec" id="sec-lot-analysis">
+            <div class="sec-hd" onclick="toggleSec('sec-lot-analysis')">LOT ANALYSIS <span class="arrow">▼</span></div>
+            <div class="sec-bd">
+              <div id="sitemap-metrics"></div>
+              <div class="sub-hd" style="margin-top:14px"><span>Edge Dimensions</span></div>
+              <div id="sitemap-edges"></div>
             </div>
-            <div id="ai-inline-zoning-result" style="margin-top:8px"></div>
           </div>
 
-          <!-- ═══ LOT ACTIONS ═══ -->
-          <div style="display:flex;gap:6px;margin-bottom:6px">
-            <button class="btn-add" onclick="sitemapApplyToMassing()" style="flex:1;font-size:11px;padding:8px 10px">⬇️ APPLY TO MASSING</button>
+          <!-- Collapsible: Zoning Estimates + AI Zoning Analysis -->
+          <div class="sec" id="sec-zoning-estimates">
+            <div class="sec-hd" onclick="toggleSec('sec-zoning-estimates')">ZONING ESTIMATES <span class="arrow">▼</span></div>
+            <div class="sec-bd">
+              <div id="sitemap-zoning"></div>
+              <button class="btn-ghost" data-ai-trigger="zoning-analysis" onclick="requestAI('zoning-analysis')" style="margin-top:10px"><span style="font-size:13px">🔍</span><span>AI ZONING ANALYSIS</span></button>
+              <div id="ai-inline-zoning-result" style="margin-top:8px"></div>
+            </div>
           </div>
-          <div style="display:flex;gap:6px;margin-bottom:6px">
-            <button id="btn-comp-sales" class="btn-add" onclick="toggleCompSales()" style="flex:1;font-size:13px;padding:7px 10px;background:#2a2a2a;color:#AEBC46;border:1px solid #AEBC4640">📍 COMPARABLE SALES</button>
+
+          <!-- ═══ LOT ACTIONS — analysis tools ═══ -->
+          <div class="sub-hd"><span style="font-size:11px">📐</span>Analysis</div>
+          <div class="btn-row" style="margin-bottom:6px">
+            <button class="btn-ghost" onclick="sitemapApplyToMassing()"><span style="font-size:13px">⬇</span><span>APPLY TO MASSING</span></button>
           </div>
-          <button class="btn-add" onclick="generateOptimalMassing()" id="btn-optimal-massing" style="background:linear-gradient(135deg,#AEBC46,#8a9a30);color:#111;font-size:12px;padding:10px;margin-bottom:10px;font-weight:700;letter-spacing:1px;display:none;width:100%;border:none;border-radius:4px;cursor:pointer">⚡ GENERATE OPTIMAL MASSING</button>
-          <div id="optimal-massing-info" style="display:none;margin-top:-4px;margin-bottom:10px;font-size:13px;color:#888;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px;max-height:70vh;overflow-y:auto"></div>
-          <div style="display:flex;gap:6px;margin-bottom:10px">
-            <button class="btn-add" onclick="sitemapExport()" style="flex:1;background:#2a2a2a;color:#ccc;border:1px solid #333;font-size:13px;padding:7px 10px">📤 EXPORT</button>
-            <button class="btn-add" onclick="sitemapCopy()" style="flex:1;background:#2a2a2a;color:#ccc;border:1px solid #333;font-size:13px;padding:7px 10px">📋 COPY DIMS</button>
+          <div class="btn-row" style="margin-bottom:6px">
+            <button id="btn-comp-sales" class="btn-ghost" onclick="toggleCompSales()"><span style="font-size:13px">📍</span><span>COMPARABLE SALES</span></button>
+          </div>
+
+          <!-- ═══ AI MASSING — paid actions ═══ -->
+          <div class="sub-hd" style="color:#F08040"><span style="font-size:11px">⚡</span>AI Massing</div>
+          <button class="btn-primary" onclick="generateOptimalMassing()" id="btn-optimal-massing" style="display:none;margin-bottom:6px"><span style="font-size:13px">⚡</span><span>GENERATE OPTIMAL MASSING</span></button>
+          <!-- 3-posture alternatives generator — Conservative / Balanced / Aggressive.
+               Wired in js/alternatives.js. Cards render into #alternatives-container. -->
+          <button class="btn-ghost-accent" onclick="generateAlternatives()" id="btn-generate-alternatives" style="display:none;margin-bottom:10px"><span style="font-size:13px">⚡</span><span>GENERATE ALTERNATIVES (3 STRATEGIES)</span></button>
+          <div id="alternatives-container" style="display:none;margin-bottom:10px"></div>
+          <div id="optimal-massing-info" style="display:none;margin-top:-4px;margin-bottom:10px;font-size:12px;color:var(--text-secondary,#A0A0AA);background:var(--bg-elevated,#222228);border:1px solid var(--border-subtle,rgba(245,241,236,0.06));border-radius:6px;padding:10px;max-height:70vh;overflow-y:auto"></div>
+
+          <!-- ═══ UTILITY ROW — export / copy / share ═══ -->
+          <div class="btn-row" style="margin-bottom:10px">
+            <button class="btn-utility" onclick="sitemapExport()"><span>📤</span><span>EXPORT</span></button>
+            <button class="btn-utility" onclick="sitemapCopy()"><span>📋</span><span>COPY DIMS</span></button>
+            <button class="btn-utility" onclick="openShareModal()" title="Generate a shareable link to this project"><span>🔗</span><span>SHARE</span></button>
           </div>
 
           <!-- ═══ BUILDING VOLUMES ═══ -->
           <div style="background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:10px">
-            <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#AEBC46;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">BUILDING VOLUMES</div>
+            <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#F5F1EC;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #333333">BUILDING VOLUMES</div>
             <div id="sitemap-vol-list"></div>
             <div style="display:flex;gap:6px;margin-top:8px">
-              <button class="btn-add" onclick="smDrawBuilding()" id="btn-draw-bldg" style="flex:1;font-size:11px;padding:8px 10px">✏️ DRAW POLYGON</button>
+              <button class="btn-ghost" onclick="smDrawBuilding()" id="btn-draw-bldg"><span style="font-size:13px">✏</span><span>DRAW POLYGON</span></button>
               <div style="flex:1;position:relative" id="shape-builder-wrap">
-                <button class="btn-add" onclick="smToggleShapeMenu()" id="btn-shape-builder" style="width:100%;background:#444444;color:#AEBC46;font-size:11px;padding:8px 10px">+ SHAPE ▾</button>
-                <div id="sm-shape-menu" style="display:none;position:absolute;bottom:100%;left:0;right:0;margin-bottom:4px;background:#1a1a1a;border:1.5px solid #AEBC46;border-radius:6px;padding:6px;z-index:200;box-shadow:0 -4px 20px rgba(0,0,0,0.6)">
+                <button class="btn-ghost" onclick="smToggleShapeMenu()" id="btn-shape-builder"><span>+ SHAPE</span><span style="font-size:9px;opacity:0.6">▾</span></button>
+                <div id="sm-shape-menu" style="display:none;position:absolute;bottom:100%;left:0;right:0;margin-bottom:4px;background:#1a1a1a;border:1.5px solid #F5F1EC;border-radius:6px;padding:6px;z-index:200;box-shadow:0 -4px 20px rgba(0,0,0,0.6)">
                 </div>
               </div>
             </div>
             <div id="sm-add-phase-wrap" style="display:none;margin-top:6px">
-              <button class="btn-add" onclick="smAddPhase()" style="width:100%;background:#2a3a2a;color:#AEBC46;border:1px solid #AEBC4644;font-size:11px;padding:8px 10px;font-weight:700">+ ADD PHASE</button>
+              <button class="btn-ghost" onclick="smAddPhase()"><span>+ ADD PHASE</span></button>
             </div>
-            <div id="sm-draw-hint" style="display:none;font-size:13px;color:#AEBC46;background:#AEBC4615;border:1px solid #AEBC4633;border-radius:4px;padding:6px 8px;margin-top:6px;text-align:center">
+            <div id="sm-draw-hint" style="display:none;font-size:13px;color:#F5F1EC;background:#F5F1EC15;border:1px solid #F5F1EC33;border-radius:4px;padding:6px 8px;margin-top:6px;text-align:center">
               <b>Click</b> on the map to place vertices · <b>Double-click</b> to close the building footprint
             </div>
             <div id="sitemap-vol-stats" style="margin-top:10px;font-size:11px;color:#888"></div>
@@ -249,7 +282,7 @@ window.__clearLotAndReload = function(){
 
           <!-- ═══ QUICK ACTIONS ═══ -->
           <div style="display:flex;gap:6px;margin-bottom:6px">
-            <button class="btn-add" onclick="smSyncTo3D()" style="flex:1;font-size:11px;padding:8px 10px">🔄 SYNC TO 3D PREVIEW</button>
+            <button class="btn-ghost" onclick="smSyncTo3D()"><span style="font-size:13px">🔄</span><span>SYNC TO 3D PREVIEW</span></button>
           </div>
         </div>
       </div>
@@ -290,39 +323,39 @@ window.__clearLotAndReload = function(){
       <div class="sec-hd" onclick="toggleSec('sec-ind-coverage')">INDUSTRIAL BUILDING <span class="arrow">▼</span></div>
       <div class="sec-bd" id="sec-ind-coverage-bd">
         <!-- Coverage slider -->
-        <div style="font-size:13px;color:#AEBC46;font-weight:700;letter-spacing:1px;margin-bottom:4px">LOT COVERAGE</div>
+        <div style="font-size:13px;color:#F5F1EC;font-weight:700;letter-spacing:1px;margin-bottom:4px">LOT COVERAGE</div>
         <div style="font-size:12px;color:#888;margin-bottom:6px;line-height:1.4">
           Warehouse footprint as a share of the lot. Rest is truck court, parking, drive aisle, and 10 ft landscape buffer.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-          <input type="range" id="industrial-coverage-slider" min="20" max="60" step="1" value="40" oninput="setIndustrialCoverage(this.value)" style="flex:1;accent-color:#AEBC46">
-          <div id="industrial-coverage-val" style="font-size:14px;font-weight:700;color:#AEBC46;min-width:46px;text-align:right;font-variant-numeric:tabular-nums">40%</div>
+          <input type="range" id="industrial-coverage-slider" min="20" max="60" step="1" value="40" oninput="setIndustrialCoverage(this.value)" style="flex:1;accent-color:#F5F1EC">
+          <div id="industrial-coverage-val" style="font-size:14px;font-weight:700;color:#F5F1EC;min-width:46px;text-align:right;font-variant-numeric:tabular-nums">40%</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:14px">
           <span>20%</span><span>40% (Class A)</span><span>60%</span>
         </div>
 
         <!-- Height slider -->
-        <div style="font-size:13px;color:#AEBC46;font-weight:700;letter-spacing:1px;margin-bottom:4px">BUILDING HEIGHT</div>
+        <div style="font-size:13px;color:#F5F1EC;font-weight:700;letter-spacing:1px;margin-bottom:4px">BUILDING HEIGHT</div>
         <div style="font-size:12px;color:#888;margin-bottom:6px;line-height:1.4">
           Total height including ~4 ft parapet. 36–40 ft is Class A bulk standard; 50+ ft is high-bay distribution.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-          <input type="range" id="industrial-height-slider" min="28" max="60" step="1" value="40" oninput="setIndustrialHeight(this.value)" style="flex:1;accent-color:#AEBC46">
-          <div id="industrial-height-val" style="font-size:14px;font-weight:700;color:#AEBC46;min-width:46px;text-align:right;font-variant-numeric:tabular-nums">40 ft</div>
+          <input type="range" id="industrial-height-slider" min="28" max="60" step="1" value="40" oninput="setIndustrialHeight(this.value)" style="flex:1;accent-color:#F5F1EC">
+          <div id="industrial-height-val" style="font-size:14px;font-weight:700;color:#F5F1EC;min-width:46px;text-align:right;font-variant-numeric:tabular-nums">40 ft</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:14px">
           <span>28 ft</span><span>40 ft</span><span>60 ft (high-bay)</span>
         </div>
 
         <!-- Cladding colour picker -->
-        <div style="font-size:13px;color:#AEBC46;font-weight:700;letter-spacing:1px;margin-bottom:4px">IMP CLADDING COLOUR</div>
+        <div style="font-size:13px;color:#F5F1EC;font-weight:700;letter-spacing:1px;margin-bottom:4px">IMP CLADDING COLOUR</div>
         <div style="font-size:12px;color:#888;margin-bottom:6px;line-height:1.4">
           Insulated metal panel exterior. Default is white / silver; pick any colour for corporate branding.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <input type="color" id="industrial-cladding-color" value="#eef0f2" oninput="setIndustrialCladdingColor(this.value)" style="width:50px;height:30px;border:1px solid #444;background:#1a1a1a;border-radius:4px;cursor:pointer;padding:0">
-          <div id="industrial-cladding-swatch-label" style="font-size:14px;font-weight:700;color:#AEBC46;font-variant-numeric:tabular-nums">#EEF0F2</div>
+          <div id="industrial-cladding-swatch-label" style="font-size:14px;font-weight:700;color:#F5F1EC;font-variant-numeric:tabular-nums">#EEF0F2</div>
           <div style="flex:1"></div>
           <button onclick="setIndustrialCladdingColor('#eef0f2')" style="background:#1a1a1a;border:1px solid #444;color:#888;padding:4px 8px;border-radius:3px;cursor:pointer;font-family:inherit;font-size:11px">RESET</button>
         </div>
@@ -364,8 +397,8 @@ window.__clearLotAndReload = function(){
           Net saleable / gross residential. Drives unit count and pro-forma. Single source of truth — replaces all hardcoded circulation/lobby/amenity deductions.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <input type="range" id="eff-slider-massing" min="0" max="100" step="1" value="80" oninput="setEfficiency(this.value/100)" style="flex:1;accent-color:#AEBC46">
-          <div id="eff-val-massing" style="font-size:14px;font-weight:700;color:#AEBC46;min-width:42px;text-align:right;font-variant-numeric:tabular-nums">80%</div>
+          <input type="range" id="eff-slider-massing" min="0" max="100" step="1" value="80" oninput="setEfficiency(this.value/100)" style="flex:1;accent-color:#F5F1EC">
+          <div id="eff-val-massing" style="font-size:14px;font-weight:700;color:#F5F1EC;min-width:42px;text-align:right;font-variant-numeric:tabular-nums">80%</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:#666">
           <span>0%</span>
@@ -383,8 +416,8 @@ window.__clearLotAndReload = function(){
           Distance the tower steps back from the podium edge on all sides. Toronto baseline = 10ft (3m); minor-variance minimum = 3ft.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <input type="range" id="stepback-slider" min="0" max="15" step="1" value="5" oninput="setStepback(this.value)" style="flex:1;accent-color:#AEBC46">
-          <div id="stepback-val" style="font-size:14px;font-weight:700;color:#AEBC46;min-width:42px;text-align:right;font-variant-numeric:tabular-nums">5 ft</div>
+          <input type="range" id="stepback-slider" min="0" max="15" step="1" value="5" oninput="setStepback(this.value)" style="flex:1;accent-color:#F5F1EC">
+          <div id="stepback-val" style="font-size:14px;font-weight:700;color:#F5F1EC;min-width:42px;text-align:right;font-variant-numeric:tabular-nums">5 ft</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:#666">
           <span>0 ft (flush)</span>
@@ -430,9 +463,9 @@ window.__clearLotAndReload = function(){
           <button onclick="calcServicing()" class="sec3d-btn" style="width:100%;margin-top:6px;border-color:#66aaff40;color:#66aaff;padding:5px 10px;font-size:13px">↻ CHECK SERVICING</button>
           <!-- Live Infrastructure Data -->
           <div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
-            <div style="font-size:14px;font-weight:700;color:#AEBC46;margin-bottom:4px">LIVE INFRASTRUCTURE DATA</div>
+            <div style="font-size:14px;font-weight:700;color:#F5F1EC;margin-bottom:4px">LIVE INFRASTRUCTURE DATA</div>
             <div style="font-size:12px;color:#888;margin-bottom:8px;line-height:1.4">Queries OEB electrical grid capacity, Toronto Open Data watermain and sewer pipe networks using your site coordinates.</div>
-            <button id="infra-scan-btn" onclick="scanInfrastructure()" class="sec3d-btn" style="width:100%;border-color:#AEBC4640;color:#AEBC46;padding:6px 10px;font-size:13px">⚡ SCAN INFRASTRUCTURE</button>
+            <button id="infra-scan-btn" onclick="scanInfrastructure()" class="sec3d-btn" style="width:100%;border-color:#F5F1EC40;color:#F5F1EC;padding:6px 10px;font-size:13px">⚡ SCAN INFRASTRUCTURE</button>
             <div id="infra-scan-status" style="font-size:12px;margin-top:6px;min-height:14px"></div>
             <div id="infra-scan-results" style="display:none;margin-top:8px"></div>
           </div>
@@ -741,7 +774,7 @@ window.__clearLotAndReload = function(){
         </select>
         <div style="display:flex;gap:6px;margin-bottom:6px">
           <input id="project-name" type="text" placeholder="Project name..."
-            style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:5px 8px;border-radius:4px;font-size:12px">
+            style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#F5F1EC;padding:5px 8px;border-radius:4px;font-size:12px">
         </div>
         <div class="save-bar">
           <button class="primary" onclick="saveProject()">💾 Save</button>
@@ -765,7 +798,7 @@ window.__clearLotAndReload = function(){
     <!-- ═══ TAB: SECTION (3D cross-section) ═══ -->
     <div id="tab-section" class="tab-content">
       <div style="margin-bottom:8px">
-        <span style="font-size:13px;font-weight:700;color:#AEBC46">BUILDING SECTION — 3D FLOOR PLATE</span>
+        <span style="font-size:13px;font-weight:700;color:#F5F1EC">BUILDING SECTION — 3D FLOOR PLATE</span>
         <span class="pf-live-badge">LIVE</span>
         <div style="font-size:13px;color:#777;margin-top:4px">Orbit, zoom, and pan to inspect from any angle. Color-coded by use.</div>
       </div>
@@ -788,13 +821,13 @@ window.__clearLotAndReload = function(){
         </div>
         <div style="position:absolute;bottom:50px;left:8px;font-size:13px;color:#777;background:rgba(26,26,26,.8);padding:6px 10px;border-radius:4px;line-height:1.6">
           Left-drag: orbit · Right-drag: pan · Scroll: zoom<br>
-          <span style="color:#AEBC46">Drag</span> stairs/elevators to move · <span style="color:#AEBC46">Click</span> to select, then <span style="color:#AEBC46">← → arrow keys</span> to rotate
+          <span style="color:#F5F1EC">Drag</span> stairs/elevators to move · <span style="color:#F5F1EC">Click</span> to select, then <span style="color:#F5F1EC">← → arrow keys</span> to rotate
         </div>
       </div>
       <div id="section3d-stats" style="margin-top:10px"></div>
       <!-- Core Placement Controls -->
       <div style="margin-top:12px;background:#1A1A1A;border:1px solid #333333;border-radius:6px;padding:10px">
-        <div style="font-size:12px;font-weight:700;color:#AEBC46;margin-bottom:8px;letter-spacing:1px">CORE PLACEMENT <span style="font-size:12px;color:#777;font-weight:400">(positions in feet from NW corner)</span></div>
+        <div style="font-size:12px;font-weight:700;color:#F5F1EC;margin-bottom:8px;letter-spacing:1px">CORE PLACEMENT <span style="font-size:12px;color:#777;font-weight:400">(positions in feet from NW corner)</span></div>
         <div id="core-controls"></div>
       </div>
     </div>
@@ -802,7 +835,7 @@ window.__clearLotAndReload = function(){
     <!-- ═══ TAB: PRO-FORMA ═══ -->
     <div id="tab-proforma" class="tab-content">
       <div style="margin-bottom:10px">
-        <span style="font-size:13px;font-weight:700;color:#AEBC46">DEVELOPMENT PRO-FORMA</span>
+        <span style="font-size:13px;font-weight:700;color:#F5F1EC">DEVELOPMENT PRO-FORMA</span>
         <span class="pf-live-badge">LIVE</span>
         <div style="font-size:13px;color:#777;margin-top:4px">All values update in real-time from the massing model</div>
       </div>
@@ -810,12 +843,12 @@ window.__clearLotAndReload = function(){
       <div style="margin-bottom:12px;padding:10px 12px;background:#1a1a1a;border:1px solid #333;border-radius:6px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <div>
-            <span style="font-size:11px;font-weight:700;color:#AEBC46;letter-spacing:1px">BUILDING EFFICIENCY</span>
+            <span style="font-size:11px;font-weight:700;color:#F5F1EC;letter-spacing:1px">BUILDING EFFICIENCY</span>
             <div style="font-size:12px;color:#777;margin-top:2px">Net saleable / gross resi · drives unit count and margin · single source of truth (no hardcoded deductions)</div>
           </div>
-          <div id="eff-val-pf" style="font-size:18px;font-weight:700;color:#AEBC46;font-variant-numeric:tabular-nums">80%</div>
+          <div id="eff-val-pf" style="font-size:18px;font-weight:700;color:#F5F1EC;font-variant-numeric:tabular-nums">80%</div>
         </div>
-        <input type="range" id="eff-slider-pf" min="0" max="100" step="1" value="80" oninput="setEfficiency(this.value/100)" style="width:100%;accent-color:#AEBC46">
+        <input type="range" id="eff-slider-pf" min="0" max="100" step="1" value="80" oninput="setEfficiency(this.value/100)" style="width:100%;accent-color:#F5F1EC">
         <div style="display:flex;justify-content:space-between;font-size:12px;color:#666;margin-top:2px">
           <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
         </div>
@@ -831,7 +864,7 @@ window.__clearLotAndReload = function(){
       <div id="pf-waterfall"></div>
       <div id="pf-dcf-section" style="margin-top:16px">
         <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
-          <span style="font-size:13px;font-weight:700;color:#AEBC46">CASH FLOW / DCF MODEL</span>
+          <span style="font-size:13px;font-weight:700;color:#F5F1EC">CASH FLOW / DCF MODEL</span>
           <span class="pf-live-badge">LIVE</span>
         </div>
         <div id="pf-dcf-inputs"></div>
@@ -841,8 +874,8 @@ window.__clearLotAndReload = function(){
       </div>
       <div id="pf-montecarlo"></div>
       <!-- AI Inline Buttons for Pro-Forma -->
-      <div style="margin-top:16px;padding:12px;border:1px dashed #AEBC46;border-radius:6px;background:#1a2a1a">
-        <div style="font-size:13px;font-weight:700;color:#AEBC46;letter-spacing:1px;margin-bottom:8px">AI ANALYSIS</div>
+      <div style="margin-top:16px;padding:12px;border:1px dashed #F5F1EC;border-radius:6px;background:#1a2a1a">
+        <div style="font-size:13px;font-weight:700;color:#F5F1EC;letter-spacing:1px;margin-bottom:8px">AI ANALYSIS</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="sec3d-btn" onclick="requestAI('proforma-optimize')" style="flex:1;min-width:140px;padding:6px 12px">📊 Optimize Pro-Forma</button>
           <button class="sec3d-btn" onclick="requestAI('risk-assessment')" style="flex:1;min-width:140px;padding:6px 12px">⚠️ Risk Assessment</button>
@@ -1036,7 +1069,7 @@ window.__clearLotAndReload = function(){
     <div id="tab-ai" class="tab-content">
       <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <span style="font-size:13px;font-weight:700;color:#AEBC46">AI INSIGHTS</span>
+          <span style="font-size:13px;font-weight:700;color:#F5F1EC">AI INSIGHTS</span>
           <span class="pf-live-badge">POWERED BY AI</span>
           <div style="font-size:13px;color:#777;margin-top:4px">AI-driven analysis of your development — zoning, financials, risk, and market positioning</div>
         </div>
@@ -1044,9 +1077,9 @@ window.__clearLotAndReload = function(){
 
       <!-- API Key Input (like Mapbox token) -->
       <div id="ai-token-section" style="margin-bottom:12px">
-        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter your <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#AEBC46">Anthropic API key</a> to enable Claude AI analysis:</div>
+        <div style="font-size:11px;color:#888;margin-bottom:8px">Enter your <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#F5F1EC">Anthropic API key</a> to enable Claude AI analysis:</div>
         <div style="display:flex;gap:6px">
-          <input type="text" id="claude-key" placeholder="Paste your API key here (sk-ant-...)" onclick="if(this.value.startsWith('••'))this.value='';this.style.color='#AEBC46'" style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#AEBC46;padding:8px 10px;border-radius:4px;font-size:12px;font-family:inherit">
+          <input type="text" id="claude-key" placeholder="Paste your API key here (sk-ant-...)" onclick="if(this.value.startsWith('••'))this.value='';this.style.color='#F5F1EC'" style="flex:1;background:#1A1A1A;border:1px solid #444444;color:#F5F1EC;padding:8px 10px;border-radius:4px;font-size:12px;font-family:inherit">
           <button class="btn-add" style="width:auto;padding:8px 16px" onclick="saveClaudeKey()">SAVE</button>
           <button class="btn-add" style="width:auto;padding:8px 12px;background:#444;color:#ccc;font-size:13px" onclick="clearClaudeKey()">CLEAR</button>
         </div>
@@ -1112,7 +1145,7 @@ window.__clearLotAndReload = function(){
           <div class="sec-bd">
             <div style="font-size:11px;color:#888;margin-bottom:8px">Generates professional executive summary, market context, and recommendations for your report.</div>
             <button class="btn-add" onclick="requestAI('report-narrative')" id="ai-btn-report">📝 GENERATE REPORT NARRATIVES</button>
-            <button class="btn-add" onclick="applyAIToReport()" id="ai-btn-apply-report" style="display:none;margin-top:6px;background:#444444;color:#AEBC46">⬇️ APPLY TO REPORT TAB</button>
+            <button class="btn-add" onclick="applyAIToReport()" id="ai-btn-apply-report" style="display:none;margin-top:6px;background:#444444;color:#F5F1EC">⬇️ APPLY TO REPORT TAB</button>
             <div id="ai-result-report" style="margin-top:10px"></div>
           </div>
         </div>
@@ -1136,12 +1169,12 @@ window.__clearLotAndReload = function(){
     <div id="tab-report" class="tab-content">
       <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <span style="font-size:13px;font-weight:700;color:#AEBC46">HIGHEST &amp; BEST USE ANALYSIS</span>
+          <span style="font-size:13px;font-weight:700;color:#F5F1EC">HIGHEST &amp; BEST USE ANALYSIS</span>
           <div style="font-size:13px;color:#777;margin-top:4px" id="report-subtitle">Project Analysis</div>
         </div>
         <div style="display:flex;gap:8px">
           <button onclick="requestAI('report-narrative')" style="background:#1a3a1a;color:#4a8;border:1px solid #4a8;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">✨ AI ENHANCE</button>
-          <button onclick="exportPDF()" style="background:#AEBC46;color:#111;border:none;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">⬇ EXPORT PDF</button>
+          <button onclick="exportPDF()" style="background:#F5F1EC;color:#111;border:none;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">⬇ EXPORT PDF</button>
           <button onclick="exportPPTX()" style="background:#c49ade;color:#111;border:none;padding:8px 16px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">⬇ EXPORT PPTX</button>
         </div>
       </div>
@@ -1155,7 +1188,7 @@ window.__clearLotAndReload = function(){
 <div id="sitemap-container" style="display:flex;flex:1;position:relative">
   <div id="sitemap-map" style="width:100%;height:100%"></div>
   <div id="sitemap-instructions" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(26,26,26,0.9);border:1px solid #333333;border-radius:8px;padding:8px 16px;font-size:11px;color:#888;white-space:nowrap;z-index:5">
-    <span style="color:#AEBC46;font-weight:600">Search</span> an address or <span style="color:#AEBC46;font-weight:600">Draw</span> a lot polygon
+    <span style="color:#F5F1EC;font-weight:600">Search</span> an address or <span style="color:#F5F1EC;font-weight:600">Draw</span> a lot polygon
   </div>
 </div>
 
@@ -1180,14 +1213,14 @@ window.__clearLotAndReload = function(){
     <button onclick="toggleWindStudy()" id="btn-wind" style="background:rgba(26,26,26,.85);border-color:#ff8866;color:#ff8866">WIND</button>
     <button onclick="toggleNoiseMap()" id="btn-noise" style="background:rgba(26,26,26,.85);border-color:#cc77ff;color:#cc77ff">NOISE</button>
     <button onclick="toggleShadowImpact()" id="btn-shadow-impact" style="background:rgba(26,26,26,.85);border-color:#e8c87a;color:#e8c87a">SHADOW IMPACT</button>
-    <button class="lighting-btn" id="btn-light-golden" onclick="setLightingPreset('golden')" style="background:rgba(174,188,70,0.3);color:#AEBC46;border-color:#AEBC46">GOLDEN</button>
+    <button class="lighting-btn" id="btn-light-golden" onclick="setLightingPreset('golden')" style="background:rgba(174,188,70,0.3);color:#F5F1EC;border-color:#F5F1EC">GOLDEN</button>
     <button class="lighting-btn" id="btn-light-night" onclick="setLightingPreset('night')" style="background:rgba(26,26,26,.85);border-color:#888;color:#888">NIGHT</button>
     <button class="lighting-btn" id="btn-light-day" onclick="setLightingPreset('day')" style="background:rgba(26,26,26,.85);border-color:#888;color:#888">DAY</button>
   </div>
 
   <!-- Materials Legend Overlay -->
   <div id="materials-legend" style="display:none;position:absolute;bottom:14px;left:14px;background:rgba(20,20,20,.88);border:1px solid rgba(174,188,70,.4);border-radius:6px;padding:10px 14px;z-index:6;font-family:inherit;pointer-events:none">
-    <div style="font-size:13px;font-weight:700;color:#AEBC46;letter-spacing:2px;margin-bottom:6px">MATERIALS</div>
+    <div style="font-size:13px;font-weight:700;color:#F5F1EC;letter-spacing:2px;margin-bottom:6px">MATERIALS</div>
     <div style="display:flex;flex-direction:column;gap:3px">
       <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#b87a5a;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Brick Base</span></div>
       <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;background:#6a8a9a;border-radius:1px;flex-shrink:0"></div><span style="font-size:11px;color:#ccc">Retail Glazing</span></div>
@@ -1202,7 +1235,7 @@ window.__clearLotAndReload = function(){
   <!-- Optimal Massing Overlay (on 3D canvas) — top-left of canvas, starts collapsed to a small badge so it never blocks the building -->
   <div id="optimal-massing-overlay" style="display:none;position:absolute;top:14px;left:14px;width:320px;max-height:calc(100% - 230px);background:rgba(18,18,18,.96);border:1px solid rgba(174,188,70,.4);border-radius:8px;z-index:6;font-family:inherit;overflow:hidden;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,.5)">
     <div style="padding:10px 14px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:8px">
-      <button id="optimal-massing-toggle-btn" onclick="(function(){var o=document.getElementById('optimal-massing-overlay');var c=document.getElementById('optimal-massing-overlay-content');var b=document.getElementById('optimal-massing-toggle-btn');var collapsed=c.style.display==='none';if(collapsed){c.style.display='block';b.innerHTML='\u25BC&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to collapse';o.style.maxHeight='calc(100% - 230px)';}else{c.style.display='none';b.innerHTML='\u25B6&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to expand details';o.style.maxHeight='auto';}})()" title="Click to expand details" style="background:none;border:none;color:#AEBC46;font-size:12px;font-weight:700;letter-spacing:1.5px;cursor:pointer;padding:0;font-family:inherit;flex:1;text-align:left">&#9654;&nbsp;OPTIMAL&nbsp;MASSING</button>
+      <button id="optimal-massing-toggle-btn" onclick="(function(){var o=document.getElementById('optimal-massing-overlay');var c=document.getElementById('optimal-massing-overlay-content');var b=document.getElementById('optimal-massing-toggle-btn');var collapsed=c.style.display==='none';if(collapsed){c.style.display='block';b.innerHTML='\u25BC&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to collapse';o.style.maxHeight='calc(100% - 230px)';}else{c.style.display='none';b.innerHTML='\u25B6&nbsp;OPTIMAL&nbsp;MASSING';b.title='Click to expand details';o.style.maxHeight='auto';}})()" title="Click to expand details" style="background:none;border:none;color:#F5F1EC;font-size:12px;font-weight:700;letter-spacing:1.5px;cursor:pointer;padding:0;font-family:inherit;flex:1;text-align:left">&#9654;&nbsp;OPTIMAL&nbsp;MASSING</button>
       <button onclick="document.getElementById('optimal-massing-overlay').style.display='none'" title="Close" style="background:none;border:1px solid #555;color:#888;font-size:14px;cursor:pointer;padding:1px 9px;border-radius:3px;line-height:1;flex-shrink:0">&times;</button>
     </div>
     <div id="optimal-massing-overlay-content" class="om-overlay-scaled" style="display:none;padding:12px 14px;overflow-y:auto;flex:1;font-size:11px;color:#ccc"></div>
@@ -1394,6 +1427,147 @@ window.addEventListener('unhandledrejection',function(e){
 });
 </script>
 
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SETTINGS MODAL — Mapbox + Claude API keys + Theme toggle
+     Wired in js/ai-chat.js (openSettingsModal / saveSettings* / setTheme).
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="settings-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);align-items:center;justify-content:center;font-family:'Outfit','Inter',system-ui,sans-serif" onclick="if(event.target===this)closeSettingsModal()">
+  <div style="background:#0F0F11;border:1px solid rgba(245,241,236,0.14);border-radius:14px;padding:28px 30px;width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 64px);overflow-y:auto;box-shadow:0 24px 60px -16px rgba(0,0,0,0.6),0 0 0 1px rgba(245,241,236,0.04);color:#F5F1EC">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px;line-height:1">⚙</span>
+        <h2 style="font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:#FFFFFF">API Settings</h2>
+      </div>
+      <button onclick="closeSettingsModal()" aria-label="Close" style="background:transparent;border:0;color:#9CA3AF;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:6px" onmouseover="this.style.color='#F5F1EC'" onmouseout="this.style.color='#9CA3AF'">×</button>
+    </div>
+    <p style="font-size:12px;color:#9CA3AF;margin:0 0 22px;line-height:1.5">Both keys live in your browser only — never sent to any server we don't own.</p>
+
+    <!-- THEME TOGGLE -->
+    <div style="margin-bottom:22px;padding:14px 16px;background:rgba(245,241,236,0.03);border:1px solid rgba(245,241,236,0.08);border-radius:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:12px;font-weight:600;letter-spacing:1.2px;color:#F5F1EC;text-transform:uppercase">Appearance</div>
+          <div style="font-size:11px;color:#9CA3AF;margin-top:3px">Switch between light and dark canvas</div>
+        </div>
+        <div id="theme-toggle" style="display:inline-flex;background:#0A0A0A;border:1px solid rgba(245,241,236,0.10);border-radius:8px;padding:3px;gap:2px">
+          <button class="theme-btn active" data-theme="dark" onclick="setTheme('dark')" style="background:transparent;border:0;color:#F5F1EC;font-family:inherit;font-size:11px;font-weight:600;letter-spacing:0.5px;padding:6px 14px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:5px">🌙 Dark</button>
+          <button class="theme-btn" data-theme="light" onclick="setTheme('light')" style="background:transparent;border:0;color:#9CA3AF;font-family:inherit;font-size:11px;font-weight:600;letter-spacing:0.5px;padding:6px 14px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:5px">☀ Light</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAPBOX -->
+    <div style="margin-bottom:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <label style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#F5F1EC;text-transform:uppercase">Mapbox token</label>
+        <span id="settings-mapbox-pill" style="font-size:9px;font-weight:700;letter-spacing:1px;padding:3px 9px;border-radius:20px;background:rgba(156,163,175,0.10);color:#9CA3AF;border:1px solid rgba(156,163,175,0.25)">UNKNOWN</span>
+      </div>
+      <div style="font-size:11px;color:#9CA3AF;margin-bottom:8px">Required — powers the satellite map + address search. Get a free one at <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener" style="color:#F5F1EC;text-decoration:underline">account.mapbox.com</a>.</div>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="settings-mapbox-input" placeholder="pk.eyJ1Ij..." spellcheck="false" autocomplete="off" style="flex:1;background:#0A0A0A;border:1px solid rgba(245,241,236,0.14);color:#F5F1EC;padding:10px 12px;border-radius:8px;font-size:12px;font-family:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace" />
+        <button onclick="saveSettingsMapboxKey()" style="background:#F5F1EC;color:#0A0A0A;border:0;padding:10px 16px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer">SAVE</button>
+        <button onclick="clearSettingsMapboxKey()" title="Remove stored token" style="background:transparent;border:1px solid rgba(245,241,236,0.14);color:#9CA3AF;padding:10px 12px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">CLEAR</button>
+      </div>
+    </div>
+
+    <!-- CLAUDE -->
+    <div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <label style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#F5F1EC;text-transform:uppercase">Claude API key</label>
+        <span id="settings-claude-pill" style="font-size:9px;font-weight:700;letter-spacing:1px;padding:3px 9px;border-radius:20px;background:rgba(156,163,175,0.10);color:#9CA3AF;border:1px solid rgba(156,163,175,0.25)">OPTIONAL</span>
+      </div>
+      <div style="font-size:11px;color:#9CA3AF;margin-bottom:8px">Optional — unlocks AI massing, alternatives, and zoning analysis. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:#F5F1EC;text-decoration:underline">console.anthropic.com</a>.</div>
+      <div style="display:flex;gap:6px">
+        <input type="password" id="settings-claude-input" placeholder="sk-ant-..." spellcheck="false" autocomplete="off" style="flex:1;background:#0A0A0A;border:1px solid rgba(245,241,236,0.14);color:#F5F1EC;padding:10px 12px;border-radius:8px;font-size:12px;font-family:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace" />
+        <button onclick="saveSettingsClaudeKey()" style="background:#F5F1EC;color:#0A0A0A;border:0;padding:10px 16px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer">SAVE</button>
+        <button onclick="clearSettingsClaudeKey()" title="Remove stored key" style="background:transparent;border:1px solid rgba(245,241,236,0.14);color:#9CA3AF;padding:10px 12px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">CLEAR</button>
+      </div>
+      <div id="settings-claude-status" style="font-size:11px;color:#9CA3AF;margin-top:8px;line-height:1.5">Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#F5F1EC">console.anthropic.com/settings/keys</a></div>
+    </div>
+
+    <!-- ───────── SHARE ACTIVITY (analytics) ───────── -->
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(245,241,236,0.08)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#F5F1EC;text-transform:uppercase">📈 Share Activity</div>
+        <button onclick="refreshShareAnalytics()" id="share-analytics-refresh" title="Refresh" style="background:transparent;border:1px solid rgba(245,241,236,0.10);color:#9CA3AF;padding:4px 10px;border-radius:6px;font-size:10px;font-weight:600;letter-spacing:0.5px;cursor:pointer">↻ REFRESH</button>
+      </div>
+      <div id="share-analytics-body" style="font-size:11px;color:#9CA3AF;line-height:1.6">Loading…</div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding-top:14px;margin-top:14px;border-top:1px solid rgba(245,241,236,0.08);display:flex;justify-content:flex-end">
+      <button onclick="closeSettingsModal()" style="background:transparent;border:1px solid rgba(245,241,236,0.18);color:#F5F1EC;padding:9px 22px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;letter-spacing:1px;cursor:pointer">DONE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     ALTERNATIVES EXPLAINER MODAL — pre-flight before firing 3 Claude calls.
+     Shown by showAlternativesExplainer() in js/alternatives.js. Skippable
+     for the rest of the session via the 'Don't show again' checkbox.
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="alternatives-explainer-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);align-items:center;justify-content:center;font-family:'Outfit','Inter',system-ui,sans-serif" onclick="if(event.target===this)closeAlternativesExplainer(false)">
+  <div style="background:#0F0F11;border:1px solid rgba(245,241,236,0.14);border-radius:14px;padding:26px 28px;width:min(620px,calc(100vw - 32px));max-height:calc(100vh - 64px);overflow-y:auto;box-shadow:0 24px 60px -16px rgba(0,0,0,0.6);color:#F5F1EC">
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px;line-height:1;color:#F08040">⚡</span>
+        <h2 style="font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:#FFFFFF">Generate Alternatives</h2>
+      </div>
+      <button onclick="closeAlternativesExplainer(false)" aria-label="Close" style="background:transparent;border:0;color:#9CA3AF;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:6px" onmouseover="this.style.color='#F5F1EC'" onmouseout="this.style.color='#9CA3AF'">×</button>
+    </div>
+    <p style="font-size:12px;color:#9CA3AF;margin:0 0 18px;line-height:1.5">Three parallel Claude calls — one per approval posture. Compare side-by-side, pick the strategy that matches your appetite for entitlement risk.</p>
+
+    <!-- 3 posture cards -->
+    <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:16px">
+      <div style="background:rgba(78,205,196,0.04);border:1px solid rgba(78,205,196,0.30);border-radius:8px;padding:10px 12px">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px">
+          <span style="font-size:11px;font-weight:700;color:#4ecdc4;letter-spacing:1px">🛡 CONSERVATIVE</span>
+          <span style="font-size:10px;color:#9CA3AF">As-of-Right · ~8 mo · LOW risk</span>
+        </div>
+        <div style="font-size:11.5px;color:#C7C7C7;line-height:1.5">Stays inside the by-law. No variances, no amendments. SPA only. Lowest density, fastest permit.</div>
+      </div>
+      <div style="background:rgba(232,200,122,0.04);border:1px solid rgba(232,200,122,0.30);border-radius:8px;padding:10px 12px">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px">
+          <span style="font-size:11px;font-weight:700;color:#e8c87a;letter-spacing:1px">⚖ BALANCED</span>
+          <span style="font-size:10px;color:#9CA3AF">Minor Variance · ~14 mo · MEDIUM risk</span>
+        </div>
+        <div style="font-size:11.5px;color:#C7C7C7;line-height:1.5">Variances on setbacks/height/parking, capped at 10% deviation (De Gasperis 4-test). Committee of Adjustment + SPA. ~10–25% density bump.</div>
+      </div>
+      <div style="background:rgba(240,128,64,0.05);border:1px solid rgba(240,128,64,0.32);border-radius:8px;padding:10px 12px">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px">
+          <span style="font-size:11px;font-weight:700;color:#F08040;letter-spacing:1px">🚀 AGGRESSIVE</span>
+          <span style="font-size:10px;color:#9CA3AF">ZBLA + likely OPA · ~24 mo · HIGH risk</span>
+        </div>
+        <div style="font-size:11.5px;color:#C7C7C7;line-height:1.5">Maximum density supported by Official Plan + adjacent precedent. Full ZBA + (likely) OPA. Patient-capital play, 18–30 mo entitlement window.</div>
+      </div>
+    </div>
+
+    <!-- Cost note -->
+    <div style="background:rgba(108,139,196,0.06);border:1px solid rgba(108,139,196,0.25);border-radius:6px;padding:8px 10px;margin-bottom:14px;font-size:11px;color:#9CA3AF;line-height:1.5">
+      <strong style="color:#C7C7C7">Cost:</strong> ~$0.02–0.05 in Claude API charges for the 3-call batch (Haiku 4.5). Each card has a ↻ button to re-roll just one option after the fact.
+    </div>
+
+    <!-- Skip-this-session + buttons -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-top:14px;border-top:1px solid rgba(245,241,236,0.08)">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#9CA3AF;cursor:pointer;user-select:none">
+        <input type="checkbox" id="alt-explainer-skip" style="accent-color:#F08040" />
+        Don't show this again this session
+      </label>
+      <div style="display:flex;gap:8px">
+        <button onclick="closeAlternativesExplainer(false)" style="background:transparent;border:1px solid rgba(245,241,236,0.18);color:#F5F1EC;padding:9px 18px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;letter-spacing:1px;cursor:pointer">CANCEL</button>
+        <button onclick="closeAlternativesExplainer(true)" style="background:#F08040;border:0;color:#0A0A0A;padding:9px 22px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer">⚡ GENERATE 3 OPTIONS</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Theme bootstrap — apply saved theme BEFORE first paint to prevent flash -->
+<script>(function(){try{var t=localStorage.getItem('estatebuilder_theme');if(t==='light')document.documentElement.classList.add('light-mode-pre');}catch(e){}})();
+document.addEventListener('DOMContentLoaded',function(){try{var t=localStorage.getItem('estatebuilder_theme');if(t==='light')document.body.classList.add('light-mode');document.documentElement.classList.remove('light-mode-pre');}catch(e){}});</script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js" integrity="sha384-Cck14aA9cifjYolcnjebXRfWGkz5ltHMBiG4px/j8GS+xQcb7OhNQWZYyWjQ+UwQ" crossorigin="anonymous"></script>
@@ -1423,14 +1597,27 @@ window.addEventListener('unhandledrejection',function(e){
 <script src="js/sitemap-osm-buildings.js?v=20260504f"></script>
 <script src="js/sitemap-ms-canadian-buildings.js?v=20260504f"></script>
 <script src="js/sitemap-mississauga-storm-nodes.js?v=20260504a"></script>
-<script src="js/sitemap-parcel-picker.js?v=20260503a"></script>
+<script src="js/sitemap-parcel-picker.js?v=20260510a"></script>
 <script src="js/sitemap-infrastructure.js?v=20260429h"></script>
 <script src="js/optimal-massing.js?v=20260504l"></script>
+<!-- Generate Alternatives — 3-posture comparator (conservative / balanced / aggressive).
+     Must load AFTER optimal-massing.js so it can reuse the same prompt-building
+     conventions, and BEFORE save-load runs autoLoad (which restores P._aiAlternatives). -->
+<script src="js/alternatives.js?v=20260508a"></script>
 <script src="js/optimal-massing-industrial.js?v=20260506f"></script>
 <script src="js/optimal-massing-multitower.js?v=20260503c"></script>
 <script src="js/ai-chat.js?v=20260429h"></script>
 <script src="js/scenarios.js?v=20260429h"></script>
 <script src="js/zoning.js?v=20260429h"></script>
+<!-- Analysis tools — calcApplications (Required Applications), calcTripParking,
+     calcInclusionaryZoning, calcShadow, calcWalkability, calcWaterCapacity,
+     toggleTTCTransitOverlay. MUST be loaded before ui.js init code so the
+     onclick handlers in the rendered HTML can find these globals. -->
+<script src="js/analysis-tools.js?v=20260508a"></script>
+<!-- Share-by-URL — encodes getState() into a URL hash so a single link
+     reproduces the full project on the recipient's machine. Pure addition;
+     does not modify save-load behaviour. Requires save-load.js loaded first. -->
+<script src="js/share.js?v=20260508a"></script>
 <script src="js/ui.js?v=20260504h"></script>
 <script src="js/civil-consultant.js?v=20260503k"></script>
 <script src="js/infrastructure-queries.js?v=20260504b"></script>
