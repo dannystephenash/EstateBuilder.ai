@@ -1013,6 +1013,12 @@ async function fetchNearbyComparables(lat,lng,address){
         applicationType: r.APPLICATION_TYPE || '',
         app_type: r.APPLICATION_TYPE || '',
         appNumber: r['APPLICATION#'] || '',
+        // Project-grouping IDs from Toronto's planning system.
+        // PARENT_FOLDER_NUMBER links related applications (OZ+SPA+OPA on one
+        // project, or multiple parcel rows for one filing) — present on ~43% of
+        // records. REFERENCE_FILE# is a secondary link present on ~3%.
+        parentFolder: (r.PARENT_FOLDER_NUMBER || '').trim(),
+        refFile:      (r['REFERENCE_FILE#']   || '').trim(),
         storeys: ext.storeys || 0,
         heightStoreys: ext.storeys || 0,
         height_m: ext.height_m || null,
@@ -1030,23 +1036,29 @@ async function fetchNearbyComparables(lat,lng,address){
     }
     nearby.sort(function(a,b){ return a.distanceM - b.distanceM; });
 
-    // ── DEDUPLICATION ──────────────────────────────────────────────
-    //   Toronto's CKAN dataset has multiple rows per real-world building:
-    //     - One row per application type: OZ + OPA + SPA + COA + CR
-    //     - One row per revision of each application
-    //     - One row per parcel in an assembly (230/232/234/236 Adelaide)
-    //   Without dedup, a single 63-storey tower can show as 5–15 dots
-    //   clustered together — visually noisy and misleading.
+    // ── DEDUPLICATION (project-id based, NOT proximity) ─────────────
     //
-    //   Two records are the same building IF:
-    //     A) Same storeys + same units (>0) AND within 150m of each other
-    //     OR
-    //     B) Same street name AND within 100m (catches parcel assemblies
-    //        where revisions have slightly different storey counts)
+    //   Toronto's CKAN dataset emits multiple rows for one real project:
+    //     - One row per application type (OZ + OPA + SPA + COA + CR)
+    //     - One row per parcel in an assembly (230/232/234 Adelaide St W
+    //       all filed under the same project)
+    //     - Occasional revisions of one filing
     //
-    //   Union-find merges chains: A~B + B~C means A,B,C are all one group.
-    //   Representative is the highest-status filing. Address is combined
-    //   so an assembly shows as "230, 232, 234, 236 Adelaide St W".
+    //   Critically: TWO ADJACENT BUILDINGS BY DIFFERENT DEVELOPERS ARE
+    //   NOT THE SAME PROJECT, even if their parcels touch. Proximity is
+    //   the wrong signal — we use Toronto's actual project-grouping IDs.
+    //
+    //   Grouping signal (first non-empty wins):
+    //     1. PARENT_FOLDER_NUMBER  — explicit project linkage (~43% of records)
+    //     2. REFERENCE_FILE#       — secondary planning-system link (~3%)
+    //     3. APPLICATION#          — sometimes shared across rows when one
+    //                                filing covers multiple parcels
+    //     4. exact normalized addr — same parcel, different application types
+    //     5. (none) → record stays alone — never merged with anything else
+    //
+    //   Inside a group, the representative is the highest-status filing.
+    //   Addresses are combined into "230, 232, 234 Adelaide St W" form so
+    //   parcel assemblies read naturally on the popup.
     var STATUS_RANK = {
       'Built': 5, 'Constructed': 5, 'Approved': 4,
       'Under Review': 3, 'In Progress': 3,
@@ -1055,15 +1067,10 @@ async function fetchNearbyComparables(lat,lng,address){
     };
     function _statusRank(s){ return STATUS_RANK[(s||'').trim()] || 0; }
 
-    // Helper: extract + normalize the street part of an address
-    //   "236 ADELAIDE ST W"        → "adelaide st w"
-    //   "236 Adelaide Street West" → "adelaide st w"
-    //   Normalizes suffix (Street→st, Avenue→ave, etc.) and direction
-    //   (West→w) so two filings on the same building written differently
-    //   still hash to the same street key.
-    function _streetOnly(addr){
+    // Address normalization used only as a last-resort grouping key.
+    // "236 ADELAIDE ST W" and "236 Adelaide Street West" → same key.
+    function _normalizeAddrKey(addr){
       return (addr || '')
-        .replace(/^\d+(?:-\d+)?\s*/, '')                      // strip leading number(s)
         .toLowerCase()
         .replace(/\bstreet\b/g,    'st')
         .replace(/\bavenue\b/g,    'ave')
@@ -1078,69 +1085,41 @@ async function fetchNearbyComparables(lat,lng,address){
         .replace(/[\s.,]+/g, ' ')
         .trim();
     }
-    function _isSameBuilding(a, b){
-      var dist = _hav(a.lat, a.lng, b.lat, b.lng);
-      // Strong proximity — any two records within 30m are almost always
-      // the same building. A typical mid-rise / tower footprint is 30–50m
-      // square, and CKAN records sit at the parcel centroid; two centroids
-      // closer than 30m almost certainly belong to the same physical site.
-      // This catches the common case the older rules miss: same project
-      // with revisions that changed storey count AND unit count.
-      if (dist < 30) return true;
-      // Same storeys + same units (>0) within 150m
-      if (a.storeys && a.storeys === b.storeys && a.units === b.units && dist < 150) return true;
-      // Same street within 100m (catches assemblies even when storey counts differ across revisions)
-      var sA = _streetOnly(a.addr), sB = _streetOnly(b.addr);
-      if (sA && sA === sB && dist < 100) return true;
-      // Same exact address, case-insensitive (different application rows on same parcel)
-      if (a.addr && b.addr && a.addr.toLowerCase() === b.addr.toLowerCase()) return true;
-      return false;
+
+    // Return a grouping key for one record, or null to leave it ungrouped.
+    function _projectKey(c){
+      if (c.parentFolder) return 'pf:' + c.parentFolder;
+      if (c.refFile)      return 'rf:' + c.refFile;
+      if (c.appNumber)    return 'an:' + c.appNumber;
+      var addrKey = _normalizeAddrKey(c.addr);
+      if (addrKey) return 'ad:' + addrKey;
+      return null;
     }
 
-    // Union-find over the nearby array
-    var parent = nearby.map(function(_, i){ return i; });
-    function _find(i){ while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
-    function _union(i, j){ var ri = _find(i), rj = _find(j); if (ri !== rj) parent[ri] = rj; }
-
-    // Spatial pre-bucket by ~200m cell so we don't do full O(n²)
-    var buckets = {};
-    nearby.forEach(function(c, i){
-      var bkey = Math.round(c.lat * 500) + ':' + Math.round(c.lng * 500);
-      if (!buckets[bkey]) buckets[bkey] = [];
-      buckets[bkey].push(i);
-    });
-    // Compare each record only with neighbours in its 3×3 bucket window
-    nearby.forEach(function(c, i){
-      var bLat = Math.round(c.lat * 500), bLng = Math.round(c.lng * 500);
-      for (var dLat = -1; dLat <= 1; dLat++) {
-        for (var dLng = -1; dLng <= 1; dLng++) {
-          var bkey = (bLat + dLat) + ':' + (bLng + dLng);
-          var bucket = buckets[bkey] || [];
-          for (var b = 0; b < bucket.length; b++) {
-            var j = bucket[b];
-            if (j <= i) continue;
-            if (_isSameBuilding(nearby[i], nearby[j])) _union(i, j);
-          }
-        }
-      }
+    var groupsByKey = {};
+    var loners = [];
+    var groupSourceCount = { pf: 0, rf: 0, an: 0, ad: 0 };
+    nearby.forEach(function(c){
+      var key = _projectKey(c);
+      if (key === null) { loners.push(c); return; }
+      if (!groupsByKey[key]) groupsByKey[key] = [];
+      groupsByKey[key].push(c);
     });
 
-    // Group by root
-    var groupsByRoot = {};
-    nearby.forEach(function(c, i){
-      var root = _find(i);
-      if (!groupsByRoot[root]) groupsByRoot[root] = [];
-      groupsByRoot[root].push(c);
-    });
-
-    var deduped = [];
-    Object.keys(groupsByRoot).forEach(function(rk){
-      var members = groupsByRoot[rk];
+    var deduped = loners.slice();
+    Object.keys(groupsByKey).forEach(function(k){
+      var members = groupsByKey[k];
       if (members.length === 1) { deduped.push(members[0]); return; }
-      // Pick the highest-status filing as representative
+      groupSourceCount[k.slice(0, 2)]++;
+
+      // Representative = highest-status filing (a project's most-advanced
+      // filing tells the most accurate story about its current state).
       members.sort(function(a, b){ return _statusRank(b.status) - _statusRank(a.status); });
       var rep = Object.assign({}, members[0]);
-      // Combine all parcel addresses on the same street into a compact list
+
+      // Combine addresses on the same street into a compact list:
+      //   "230 ADELAIDE ST W", "232 ADELAIDE ST W", "234 ADELAIDE ST W"
+      //   → "230, 232, 234 ADELAIDE ST W"
       var byStreet = {};
       members.forEach(function(m){
         var addr = (m.addr || '').trim();
@@ -1151,30 +1130,41 @@ async function fetchNearbyComparables(lat,lng,address){
           if (!byStreet[street]) byStreet[street] = new Set();
           byStreet[street].add(num);
         } else {
-          if (!byStreet[addr]) byStreet[addr] = null; // no number
+          if (!byStreet[addr]) byStreet[addr] = null;
         }
       });
       var parts = Object.keys(byStreet).map(function(street){
         var s = byStreet[street];
         if (!s) return street;
-        var nums = Array.from(s).sort(function(a, b){ return parseInt(a,10) - parseInt(b,10); });
+        var nums = Array.from(s).sort(function(a, b){ return parseInt(a, 10) - parseInt(b, 10); });
         return nums.join(', ') + ' ' + street;
       });
       if (parts.length) {
         rep.addr = parts.join(' / ');
         rep.address = rep.addr;
       }
+
       rep.filings = members.length;
-      // Use the longest description (typically the most recent revision)
+
+      // Longest description = typically the most recent revision
       var longest = members.reduce(function(best, m){
-        return (m.description||'').length > (best.description||'').length ? m : best;
+        return (m.description || '').length > (best.description || '').length ? m : best;
       }, members[0]);
       rep.description = longest.description;
       rep.desc = longest.description;
-      // Use max storeys / units across all filings in the group
-      rep.storeys = members.reduce(function(mx, m){ return Math.max(mx, m.storeys||0); }, 0);
+
+      // Max storeys / units across all filings in the group
+      rep.storeys = members.reduce(function(mx, m){ return Math.max(mx, m.storeys || 0); }, 0);
       rep.heightStoreys = rep.storeys;
-      rep.units = members.reduce(function(mx, m){ return Math.max(mx, m.units||0); }, 0);
+      rep.units = members.reduce(function(mx, m){ return Math.max(mx, m.units || 0); }, 0);
+
+      // Centroid of all member parcels (so the dot sits in the middle of
+      // an assembly rather than on one arbitrary parcel)
+      var sumLat = 0, sumLng = 0;
+      members.forEach(function(m){ sumLat += m.lat; sumLng += m.lng; });
+      rep.lat = sumLat / members.length;
+      rep.lng = sumLng / members.length;
+
       deduped.push(rep);
     });
 
@@ -1184,9 +1174,11 @@ async function fetchNearbyComparables(lat,lng,address){
 
     if (nearby.length > 0) {
       P.comparables = nearby;
-      console.log('[Comparables] JSONP path: ' + nearby.length + ' unique buildings within ' + RADIUS + 'm ' +
-        '(merged ' + mergedCount + ' duplicate filings · filtered out: ' +
-        skipped.lowQuality + ' dead-end / ' + skipped.outsideRadius + ' too far / ' +
+      console.log('[Comparables] JSONP path: ' + nearby.length + ' unique projects within ' + RADIUS + 'm ' +
+        '(merged ' + mergedCount + ' duplicate filings via parentFolder/refFile/appNum/addr · ' +
+        'group sources: ' + groupSourceCount.pf + ' parent-folder, ' + groupSourceCount.rf + ' ref-file, ' +
+        groupSourceCount.an + ' app-number, ' + groupSourceCount.ad + ' shared-address · ' +
+        'filtered out: ' + skipped.lowQuality + ' dead-end / ' + skipped.outsideRadius + ' too far / ' +
         skipped.noCoords + ' no coords / ' + skipped.outsideBbox + ' outside GTA)');
       return P.comparables;
     }
