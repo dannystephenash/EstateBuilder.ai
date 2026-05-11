@@ -1169,153 +1169,23 @@ async function fetchNearbyComparables(lat,lng,address){
     });
 
     var mergedCount = nearby.length - deduped.length;
-
-    // ── SECOND-PASS MERGE: cross-folder dups ────────────────────────
-    //
-    // Toronto's CKAN sometimes assigns the SAME real project to two or more
-    // different PARENT_FOLDER_NUMBERs — typically when phase-1 applications
-    // get one folder, then phase-2 amendments/revisions get a fresh folder.
-    // The ID-based pass above respects those folders, so a project can leak
-    // through as two dots sitting on top of each other.
-    //
-    // This pass catches them: any two groups that share ≥1 constituent
-    // parcel address AND have compatible storey counts (within ±5, or one
-    // missing) are the same project. Merge them.
-
-    // Split a combined assembly address back into its individual parcel
-    // address tokens, normalized:
-    //   "260, 266, 270 KING ST W / 1, 19 DRAPER ST"
-    //     → ["260 king st w", "266 king st w", "270 king st w",
-    //        "1 draper st",  "19 draper st"]
-    function _addrTokens(addr){
-      var tokens = [];
-      (addr || '').split('/').forEach(function(part){
-        part = part.trim();
-        if (!part) return;
-        var m = part.match(/^([\d,\s-]+)\s+(.+)$/);
-        if (m){
-          var nums = m[1].split(',').map(function(n){ return n.trim(); }).filter(Boolean);
-          var street = m[2].trim();
-          nums.forEach(function(n){
-            var t = _normalizeAddrKey(n + ' ' + street);
-            if (t) tokens.push(t);
-          });
-        } else {
-          var t = _normalizeAddrKey(part);
-          if (t) tokens.push(t);
-        }
-      });
-      return tokens;
-    }
-
-    // Index: address → list of group indices that contain it
-    var addrToGroups = {};
-    deduped.forEach(function(rep, i){
-      var seen = {};
-      _addrTokens(rep.addr).forEach(function(t){
-        if (seen[t]) return;
-        seen[t] = true;
-        if (!addrToGroups[t]) addrToGroups[t] = [];
-        addrToGroups[t].push(i);
-      });
-    });
-
-    // Union-find over the (already-deduped) groups
-    var parent2 = deduped.map(function(_, i){ return i; });
-    function _find2(i){ while (parent2[i] !== i){ parent2[i] = parent2[parent2[i]]; i = parent2[i]; } return i; }
-    function _union2(i, j){ var ri = _find2(i), rj = _find2(j); if (ri !== rj) parent2[ri] = rj; }
-
-    var crossFolderMerges = 0;
-    Object.keys(addrToGroups).forEach(function(t){
-      var groups = addrToGroups[t];
-      if (groups.length < 2) return;
-      for (var i = 0; i < groups.length; i++){
-        for (var j = i + 1; j < groups.length; j++){
-          var a = deduped[groups[i]];
-          var b = deduped[groups[j]];
-          var sa = a.storeys || 0, sb = b.storeys || 0;
-          // Compatible storeys: both missing, one missing, or within ±5
-          if (sa === 0 || sb === 0 || Math.abs(sa - sb) <= 5){
-            if (_find2(groups[i]) !== _find2(groups[j])){
-              _union2(groups[i], groups[j]);
-              crossFolderMerges++;
-            }
-          }
-        }
-      }
-    });
-
-    // Coalesce
-    var finalGroups = {};
-    deduped.forEach(function(rep, i){
-      var root = _find2(i);
-      if (!finalGroups[root]) finalGroups[root] = [];
-      finalGroups[root].push(rep);
-    });
-
-    var finalDeduped = [];
-    Object.keys(finalGroups).forEach(function(rk){
-      var members = finalGroups[rk];
-      if (members.length === 1){ finalDeduped.push(members[0]); return; }
-      // Highest-status rep
-      members.sort(function(a, b){ return _statusRank(b.status) - _statusRank(a.status); });
-      var rep = Object.assign({}, members[0]);
-      // Re-assemble address from all members' individual parcel tokens, so
-      // "260, 266 KING ST W" + "260, 266-270 KING ST W" produces a single
-      // clean "260, 266, 266-270 KING ST W" instead of concatenating both.
-      var byStreet2 = {};
-      members.forEach(function(m){
-        (m.addr || '').split('/').forEach(function(part){
-          part = part.trim();
-          if (!part) return;
-          var mm = part.match(/^([\d,\s-]+)\s+(.+)$/);
-          if (mm){
-            var nums = mm[1].split(',').map(function(n){ return n.trim(); }).filter(Boolean);
-            var street = mm[2].trim();
-            if (!byStreet2[street]) byStreet2[street] = {};
-            nums.forEach(function(n){ byStreet2[street][n] = true; });
-          } else {
-            if (!byStreet2[part]) byStreet2[part] = null;
-          }
-        });
-      });
-      var addrParts = Object.keys(byStreet2).map(function(street){
-        var nums = byStreet2[street];
-        if (!nums) return street;
-        var sorted = Object.keys(nums).sort(function(a, b){
-          return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0);
-        });
-        return sorted.join(', ') + ' ' + street;
-      });
-      rep.addr = addrParts.join(' / ');
-      rep.address = rep.addr;
-      // Sum filings, take max storeys/units, longest description
-      rep.filings = members.reduce(function(s, m){ return s + (m.filings || 1); }, 0);
-      rep.storeys = members.reduce(function(mx, m){ return Math.max(mx, m.storeys || 0); }, 0);
-      rep.heightStoreys = rep.storeys;
-      rep.units = members.reduce(function(mx, m){ return Math.max(mx, m.units || 0); }, 0);
-      var longest = members.reduce(function(best, m){
-        return (m.description || '').length > (best.description || '').length ? m : best;
-      }, members[0]);
-      rep.description = longest.description;
-      rep.desc = longest.description;
-      // Centroid
-      var sLat = 0, sLng = 0;
-      members.forEach(function(m){ sLat += m.lat; sLng += m.lng; });
-      rep.lat = sLat / members.length;
-      rep.lng = sLng / members.length;
-      finalDeduped.push(rep);
-    });
-
-    var crossFolderShrink = deduped.length - finalDeduped.length;
-    nearby = finalDeduped;
+    nearby = deduped;
     // ────────────────────────────────────────────────────────────────
+    //
+    // NOTE: Earlier attempts at a "second-pass" merge by shared addresses +
+    // similar storeys (commit 197106f) chained groups transitively across
+    // the whole downtown (A∩B + B∩C + C∩D → ABCD all merge), producing one
+    // mega-group covering 18 streets. Reverted in this commit. The id-based
+    // pass above is the safe ceiling — it strictly respects Toronto's
+    // planning-system grouping (PARENT_FOLDER_NUMBER / REFERENCE_FILE# /
+    // APPLICATION# / exact address). A future, safer second-pass would
+    // require BOTH high Jaccard similarity on parcel sets AND non-transitive
+    // pairwise-only merges; not implemented yet.
 
     if (nearby.length > 0) {
       P.comparables = nearby;
       console.log('[Comparables] JSONP path: ' + nearby.length + ' unique projects within ' + RADIUS + 'm ' +
-        '(pass-1 merged ' + mergedCount + ' duplicate filings via parentFolder/refFile/appNum/addr · ' +
-        'pass-2 merged ' + crossFolderShrink + ' more via shared-address+storeys (cross-folder dups) · ' +
+        '(merged ' + mergedCount + ' duplicate filings via parentFolder/refFile/appNum/addr · ' +
         'group sources: ' + groupSourceCount.pf + ' parent-folder, ' + groupSourceCount.rf + ' ref-file, ' +
         groupSourceCount.an + ' app-number, ' + groupSourceCount.ad + ' shared-address · ' +
         'filtered out: ' + skipped.lowQuality + ' dead-end / ' + skipped.outsideRadius + ' too far / ' +
