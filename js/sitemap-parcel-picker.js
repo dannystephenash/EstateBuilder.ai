@@ -1158,12 +1158,44 @@ async function fetchNearbyComparables(lat,lng,address){
       rep.heightStoreys = rep.storeys;
       rep.units = members.reduce(function(mx, m){ return Math.max(mx, m.units || 0); }, 0);
 
-      // Centroid of all member parcels (so the dot sits in the middle of
-      // an assembly rather than on one arbitrary parcel)
-      var sumLat = 0, sumLng = 0;
-      members.forEach(function(m){ sumLat += m.lat; sumLng += m.lng; });
-      rep.lat = sumLat / members.length;
-      rep.lng = sumLng / members.length;
+      // Dot position = the canonical parcel coord, picked as: lowest
+      // street-number member on the most-represented street. This anchors
+      // the dot on a REAL address from the assembly (e.g., "260 King St W"
+      // wins over centroid math that could land between buildings).
+      //
+      // Falls back to members[0]'s coord (the highest-status filing) when
+      // no parseable street number exists.
+      var streetFreq = {};
+      members.forEach(function(m){
+        var mm = (m.addr || '').match(/^[\d,\s\-]*\s+(.+?)(?:\s*\/|$)/);
+        var streetTok = mm ? mm[1].trim().toLowerCase() : null;
+        if (streetTok) streetFreq[streetTok] = (streetFreq[streetTok] || 0) + 1;
+      });
+      var primaryStreet = Object.keys(streetFreq).sort(function(a, b){
+        return streetFreq[b] - streetFreq[a];
+      })[0];
+      var canonicalMember = null;
+      if (primaryStreet){
+        var candidates = members.filter(function(m){
+          var mm = (m.addr || '').match(/^[\d,\s\-]*\s+(.+?)(?:\s*\/|$)/);
+          return mm && mm[1].trim().toLowerCase() === primaryStreet;
+        });
+        candidates.sort(function(a, b){
+          var na = parseInt((a.addr || '').match(/^\d+/) || ['0'], 10);
+          var nb = parseInt((b.addr || '').match(/^\d+/) || ['0'], 10);
+          return na - nb;
+        });
+        canonicalMember = candidates[0];
+      }
+      if (canonicalMember){
+        rep.lat = canonicalMember.lat;
+        rep.lng = canonicalMember.lng;
+      }
+      // else: rep.lat/lng stays as members[0] (highest-status filing) — already set by Object.assign above
+
+      // Preserve the canonical individual address so the popup can show
+      // "Primary: 260 King St W" alongside the full assembly list.
+      rep.primaryAddr = canonicalMember ? canonicalMember.addr : members[0].addr;
 
       deduped.push(rep);
     });
